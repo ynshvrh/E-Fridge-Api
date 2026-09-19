@@ -26,6 +26,21 @@ type FridgeMember struct {
 	JoinedAt time.Time
 }
 
+type NutritionLog struct {
+	ID       uuid.UUID
+	UserID   uuid.UUID
+	Date     pgtype.Date
+	MealType string
+	FoodName string
+	Quantity float64
+	Unit     string
+	Calories int32
+	Protein  float64
+	Fat      float64
+	Carbs    float64
+	LoggedAt time.Time
+}
+
 type Product struct {
 	ID         uuid.UUID
 	FridgeID   uuid.UUID
@@ -60,4 +75,13 @@ type User struct {
 	PasswordHash string
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
+}
+
+type UserNutritionGoal struct {
+	UserID        uuid.UUID
+	CalorieTarget int32
+	ProteinTarget float64
+	FatTarget     float64
+	CarbsTarget   float64
+	UpdatedAt     time.Time
 }
