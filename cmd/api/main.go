@@ -58,7 +58,7 @@ func main() {
 	fridgeService := fridge.NewService(queries)
 	fridgeHandler := fridge.NewHandler(fridgeService)
 
-	productsService := products.NewService(queries)
+	productsService := products.NewService(queries, cfg)
 	productsHandler := products.NewHandler(productsService)
 
 	nutritionService := nutrition.NewService(queries)

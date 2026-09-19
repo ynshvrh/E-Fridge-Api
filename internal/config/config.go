@@ -22,6 +22,7 @@ type Config struct {
 	OpenRouterModel  string
 	OpenRouterModels []string
 	FastModel        string
+	CheapModel       string
 	SmartModel       string
 }
 
@@ -44,10 +45,11 @@ func Load() *Config {
 	}
 
 	openRouterKey := getEnv("OPENROUTER_API_KEY", "")
-	openRouterModel := getEnv("OPENROUTER_MODEL", "google/gemini-2.5-flash")
+	openRouterModel := getEnv("OPENROUTER_MODEL", "meta-llama/llama-3.3-70b-instruct:free")
 	fastModel := getEnv("OPENROUTER_FAST_MODEL", "meta-llama/llama-3.3-70b-instruct:free")
-	smartModel := getEnv("OPENROUTER_SMART_MODEL", "anthropic/claude-3.5-sonnet")
-	modelsRaw := getEnv("OPENROUTER_MODELS", "google/gemini-2.5-flash,meta-llama/llama-3.3-70b-instruct:free,deepseek/deepseek-chat")
+	cheapModel := getEnv("OPENROUTER_CHEAP_MODEL", "deepseek/deepseek-chat")
+	smartModel := getEnv("OPENROUTER_SMART_MODEL", "deepseek/deepseek-chat")
+	modelsRaw := getEnv("OPENROUTER_MODELS", "meta-llama/llama-3.3-70b-instruct:free,deepseek/deepseek-chat")
 	var openRouterModels []string
 	for _, m := range strings.Split(modelsRaw, ",") {
 		trimmed := strings.TrimSpace(m)
@@ -72,6 +74,7 @@ func Load() *Config {
 		OpenRouterModel:  openRouterModel,
 		OpenRouterModels: openRouterModels,
 		FastModel:        fastModel,
+		CheapModel:       cheapModel,
 		SmartModel:       smartModel,
 	}
 }

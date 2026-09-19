@@ -34,6 +34,9 @@ func (h *Handler) Routes(jwtSecret string, queries *db.Queries) chi.Router {
 	r.Group(func(authRouter chi.Router) {
 		authRouter.Use(middleware.Auth(jwtSecret))
 
+		authRouter.Post("/estimate-nutrition", h.EstimateNutrition)
+		authRouter.Get("/barcode/{code}", h.LookupBarcode)
+
 		// All following routes require a valid fridge context (X-Fridge-Id header)
 		authRouter.Group(func(fridgeRouter chi.Router) {
 			fridgeRouter.Use(middleware.RequireFridge(queries))
@@ -205,3 +208,48 @@ func (h *Handler) Clear(w http.ResponseWriter, r *http.Request) {
 
 	response.JSON(w, http.StatusOK, map[string]string{"message": "Fridge cleared successfully"})
 }
+
+func (h *Handler) EstimateNutrition(w http.ResponseWriter, r *http.Request) {
+	var input EstimateNutritionInput
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		response.Error(w, http.StatusBadRequest, "Invalid request payload", "INVALID_REQUEST")
+		return
+	}
+
+	res, err := h.service.EstimateNutrition(r.Context(), input)
+	if err != nil {
+		if errors.Is(err, ErrEmptyName) {
+			response.Error(w, http.StatusBadRequest, "Product name cannot be empty", "INVALID_INPUT")
+			return
+		}
+		response.Error(w, http.StatusInternalServerError, "Failed to estimate nutrition", "ESTIMATION_FAILED")
+		return
+	}
+
+	response.JSON(w, http.StatusOK, res)
+}
+
+func (h *Handler) LookupBarcode(w http.ResponseWriter, r *http.Request) {
+	code := chi.URLParam(r, "code")
+	if code == "" {
+		response.Error(w, http.StatusBadRequest, "Barcode is required", "INVALID_INPUT")
+		return
+	}
+
+	res, err := h.service.LookupBarcode(r.Context(), code)
+	if err != nil {
+		if errors.Is(err, ErrBarcodeNotFound) {
+			response.Error(w, http.StatusNotFound, "Товар за цим штрих-кодом не знайдено в базі OpenFoodFacts", "NOT_FOUND")
+			return
+		}
+		if errors.Is(err, ErrInvalidBarcode) {
+			response.Error(w, http.StatusBadRequest, "Некоректний формат штрих-коду", "INVALID_BARCODE")
+			return
+		}
+		response.Error(w, http.StatusInternalServerError, err.Error(), "LOOKUP_FAILED")
+		return
+	}
+
+	response.JSON(w, http.StatusOK, res)
+}
+

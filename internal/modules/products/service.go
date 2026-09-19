@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/ynshvrh/E-Fridge-Api/internal/config"
 	"github.com/ynshvrh/E-Fridge-Api/internal/db"
 )
 
@@ -89,11 +91,19 @@ type UpdateProductInput struct {
 }
 
 type Service struct {
-	queries *db.Queries
+	queries    *db.Queries
+	cfg        *config.Config
+	httpClient *http.Client
 }
 
-func NewService(queries *db.Queries) *Service {
-	return &Service{queries: queries}
+func NewService(queries *db.Queries, cfg *config.Config) *Service {
+	return &Service{
+		queries: queries,
+		cfg:     cfg,
+		httpClient: &http.Client{
+			Timeout: 15 * time.Second,
+		},
+	}
 }
 
 func (s *Service) GetCategories() []CategoryInfo {
