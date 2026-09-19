@@ -19,6 +19,7 @@ import (
 	"github.com/ynshvrh/E-Fridge-Api/internal/db"
 	"github.com/ynshvrh/E-Fridge-Api/internal/modules/auth"
 	"github.com/ynshvrh/E-Fridge-Api/internal/modules/fridge"
+	"github.com/ynshvrh/E-Fridge-Api/internal/modules/products"
 	"github.com/ynshvrh/E-Fridge-Api/internal/pkg/response"
 )
 
@@ -51,6 +52,9 @@ func main() {
 	fridgeService := fridge.NewService(queries)
 	fridgeHandler := fridge.NewHandler(fridgeService)
 
+	productsService := products.NewService(queries)
+	productsHandler := products.NewHandler(productsService)
+
 	// 5. Router
 	r := chi.NewRouter()
 
@@ -82,6 +86,7 @@ func main() {
 
 		api.Mount("/auth", authHandler.Routes(cfg.JWTSecret))
 		api.Mount("/fridges", fridgeHandler.Routes(cfg.JWTSecret))
+		api.Mount("/products", productsHandler.Routes(cfg.JWTSecret, queries))
 	})
 
 	// 6. HTTP Server

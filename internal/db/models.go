@@ -26,6 +26,24 @@ type FridgeMember struct {
 	JoinedAt time.Time
 }
 
+type Product struct {
+	ID         uuid.UUID
+	FridgeID   uuid.UUID
+	Name       string
+	Category   string
+	Quantity   float64
+	Unit       string
+	ExpiryDate pgtype.Date
+	Calories   int32
+	Protein    float64
+	Fat        float64
+	Carbs      float64
+	Notes      string
+	CreatedBy  uuid.UUID
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
+}
+
 type RefreshToken struct {
 	ID        uuid.UUID
 	UserID    uuid.UUID
