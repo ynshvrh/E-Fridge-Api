@@ -99,9 +99,18 @@ type CreateUserParams struct {
 	PasswordHash string
 }
 
-func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, error) {
+type CreateUserRow struct {
+	ID           uuid.UUID
+	Email        string
+	Name         string
+	PasswordHash string
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+}
+
+func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (CreateUserRow, error) {
 	row := q.db.QueryRow(ctx, createUser, arg.Email, arg.Name, arg.PasswordHash)
-	var i User
+	var i CreateUserRow
 	err := row.Scan(
 		&i.ID,
 		&i.Email,
@@ -257,9 +266,18 @@ FROM users
 WHERE email = $1
 `
 
-func (q *Queries) GetUserByEmail(ctx context.Context, email string) (User, error) {
+type GetUserByEmailRow struct {
+	ID           uuid.UUID
+	Email        string
+	Name         string
+	PasswordHash string
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+}
+
+func (q *Queries) GetUserByEmail(ctx context.Context, email string) (GetUserByEmailRow, error) {
 	row := q.db.QueryRow(ctx, getUserByEmail, email)
-	var i User
+	var i GetUserByEmailRow
 	err := row.Scan(
 		&i.ID,
 		&i.Email,
@@ -298,6 +316,59 @@ func (q *Queries) GetUserByID(ctx context.Context, id uuid.UUID) (GetUserByIDRow
 	return i, err
 }
 
+const getUserFullByID = `-- name: GetUserFullByID :one
+SELECT id, email, name, dietary_preferences, cuisine_preference, preferred_language, preferred_model, created_at, updated_at
+FROM users
+WHERE id = $1
+`
+
+type GetUserFullByIDRow struct {
+	ID                 uuid.UUID
+	Email              string
+	Name               string
+	DietaryPreferences string
+	CuisinePreference  string
+	PreferredLanguage  string
+	PreferredModel     string
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
+}
+
+func (q *Queries) GetUserFullByID(ctx context.Context, id uuid.UUID) (GetUserFullByIDRow, error) {
+	row := q.db.QueryRow(ctx, getUserFullByID, id)
+	var i GetUserFullByIDRow
+	err := row.Scan(
+		&i.ID,
+		&i.Email,
+		&i.Name,
+		&i.DietaryPreferences,
+		&i.CuisinePreference,
+		&i.PreferredLanguage,
+		&i.PreferredModel,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getUserPasswordByID = `-- name: GetUserPasswordByID :one
+SELECT id, password_hash
+FROM users
+WHERE id = $1
+`
+
+type GetUserPasswordByIDRow struct {
+	ID           uuid.UUID
+	PasswordHash string
+}
+
+func (q *Queries) GetUserPasswordByID(ctx context.Context, id uuid.UUID) (GetUserPasswordByIDRow, error) {
+	row := q.db.QueryRow(ctx, getUserPasswordByID, id)
+	var i GetUserPasswordByIDRow
+	err := row.Scan(&i.ID, &i.PasswordHash)
+	return i, err
+}
+
 const getValidRefreshTokenByHash = `-- name: GetValidRefreshTokenByHash :one
 SELECT id, user_id, token_hash, expires_at, revoked_at, created_at
 FROM refresh_tokens
@@ -316,6 +387,21 @@ func (q *Queries) GetValidRefreshTokenByHash(ctx context.Context, tokenHash stri
 		&i.CreatedAt,
 	)
 	return i, err
+}
+
+const removeFridgeMember = `-- name: RemoveFridgeMember :exec
+DELETE FROM fridge_members
+WHERE fridge_id = $1 AND user_id = $2
+`
+
+type RemoveFridgeMemberParams struct {
+	FridgeID uuid.UUID
+	UserID   uuid.UUID
+}
+
+func (q *Queries) RemoveFridgeMember(ctx context.Context, arg RemoveFridgeMemberParams) error {
+	_, err := q.db.Exec(ctx, removeFridgeMember, arg.FridgeID, arg.UserID)
+	return err
 }
 
 const revokeAllUserRefreshTokens = `-- name: RevokeAllUserRefreshTokens :exec
@@ -338,4 +424,78 @@ WHERE token_hash = $1
 func (q *Queries) RevokeRefreshToken(ctx context.Context, tokenHash string) error {
 	_, err := q.db.Exec(ctx, revokeRefreshToken, tokenHash)
 	return err
+}
+
+const updateUserPassword = `-- name: UpdateUserPassword :exec
+UPDATE users
+SET password_hash = $2, updated_at = NOW()
+WHERE id = $1
+`
+
+type UpdateUserPasswordParams struct {
+	ID           uuid.UUID
+	PasswordHash string
+}
+
+func (q *Queries) UpdateUserPassword(ctx context.Context, arg UpdateUserPasswordParams) error {
+	_, err := q.db.Exec(ctx, updateUserPassword, arg.ID, arg.PasswordHash)
+	return err
+}
+
+const updateUserProfile = `-- name: UpdateUserProfile :one
+UPDATE users
+SET 
+    name = $2,
+    dietary_preferences = $3,
+    cuisine_preference = $4,
+    preferred_language = $5,
+    preferred_model = $6,
+    updated_at = NOW()
+WHERE id = $1
+RETURNING id, email, name, dietary_preferences, cuisine_preference, preferred_language, preferred_model, created_at, updated_at
+`
+
+type UpdateUserProfileParams struct {
+	ID                 uuid.UUID
+	Name               string
+	DietaryPreferences string
+	CuisinePreference  string
+	PreferredLanguage  string
+	PreferredModel     string
+}
+
+type UpdateUserProfileRow struct {
+	ID                 uuid.UUID
+	Email              string
+	Name               string
+	DietaryPreferences string
+	CuisinePreference  string
+	PreferredLanguage  string
+	PreferredModel     string
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
+}
+
+func (q *Queries) UpdateUserProfile(ctx context.Context, arg UpdateUserProfileParams) (UpdateUserProfileRow, error) {
+	row := q.db.QueryRow(ctx, updateUserProfile,
+		arg.ID,
+		arg.Name,
+		arg.DietaryPreferences,
+		arg.CuisinePreference,
+		arg.PreferredLanguage,
+		arg.PreferredModel,
+	)
+	var i UpdateUserProfileRow
+	err := row.Scan(
+		&i.ID,
+		&i.Email,
+		&i.Name,
+		&i.DietaryPreferences,
+		&i.CuisinePreference,
+		&i.PreferredLanguage,
+		&i.PreferredModel,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }

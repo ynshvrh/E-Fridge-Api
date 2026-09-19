@@ -13,6 +13,11 @@ SELECT id, email, name, created_at, updated_at
 FROM users
 WHERE id = $1;
 
+-- name: GetUserPasswordByID :one
+SELECT id, password_hash
+FROM users
+WHERE id = $1;
+
 -- name: CreateRefreshToken :one
 INSERT INTO refresh_tokens (user_id, token_hash, expires_at)
 VALUES ($1, $2, $3)
@@ -71,3 +76,30 @@ ORDER BY fm.joined_at ASC;
 -- name: DeleteFridge :exec
 DELETE FROM fridges
 WHERE id = $1;
+
+-- name: UpdateUserProfile :one
+UPDATE users
+SET 
+    name = $2,
+    dietary_preferences = $3,
+    cuisine_preference = $4,
+    preferred_language = $5,
+    preferred_model = $6,
+    updated_at = NOW()
+WHERE id = $1
+RETURNING id, email, name, dietary_preferences, cuisine_preference, preferred_language, preferred_model, created_at, updated_at;
+
+-- name: UpdateUserPassword :exec
+UPDATE users
+SET password_hash = $2, updated_at = NOW()
+WHERE id = $1;
+
+-- name: GetUserFullByID :one
+SELECT id, email, name, dietary_preferences, cuisine_preference, preferred_language, preferred_model, created_at, updated_at
+FROM users
+WHERE id = $1;
+
+-- name: RemoveFridgeMember :exec
+DELETE FROM fridge_members
+WHERE fridge_id = $1 AND user_id = $2;
+

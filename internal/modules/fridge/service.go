@@ -139,3 +139,54 @@ func (s *Service) GetFridgeDetails(ctx context.Context, fridgeID, userID uuid.UU
 		Members:   memberDTOs,
 	}, nil
 }
+
+func (s *Service) AddMemberByEmail(ctx context.Context, fridgeID, actorID uuid.UUID, email, role string) (*MemberDTO, error) {
+	actorMember, err := s.queries.GetFridgeMember(ctx, db.GetFridgeMemberParams{
+		FridgeID: fridgeID,
+		UserID:   actorID,
+	})
+	if err != nil || (actorMember.Role != "owner" && actorMember.Role != "admin") {
+		return nil, ErrNotAuthorized
+	}
+
+	targetUser, err := s.queries.GetUserByEmail(ctx, strings.TrimSpace(email))
+	if err != nil {
+		return nil, ErrMemberNotFound
+	}
+
+	if role == "" {
+		role = "member"
+	}
+
+	m, err := s.queries.AddFridgeMember(ctx, db.AddFridgeMemberParams{
+		FridgeID: fridgeID,
+		UserID:   targetUser.ID,
+		Role:     role,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to add member: %w", err)
+	}
+
+	return &MemberDTO{
+		ID:       targetUser.ID,
+		Name:     targetUser.Name,
+		Email:    targetUser.Email,
+		Role:     m.Role,
+		JoinedAt: m.JoinedAt,
+	}, nil
+}
+
+func (s *Service) RemoveMember(ctx context.Context, fridgeID, actorID, targetUserID uuid.UUID) error {
+	actorMember, err := s.queries.GetFridgeMember(ctx, db.GetFridgeMemberParams{
+		FridgeID: fridgeID,
+		UserID:   actorID,
+	})
+	if err != nil || (actorMember.Role != "owner" && actorMember.Role != "admin") {
+		return ErrNotAuthorized
+	}
+
+	return s.queries.RemoveFridgeMember(ctx, db.RemoveFridgeMemberParams{
+		FridgeID: fridgeID,
+		UserID:   targetUserID,
+	})
+}

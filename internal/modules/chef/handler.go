@@ -26,8 +26,29 @@ func (h *Handler) Routes(jwtSecret string, queries *db.Queries) chi.Router {
 
 	r.Post("/chat", h.Chat)
 	r.Post("/generate", h.Generate)
+	r.Get("/history", h.GetHistory)
+	r.Delete("/history", h.ClearHistory)
 
 	return r
+}
+
+func (h *Handler) GetHistory(w http.ResponseWriter, r *http.Request) {
+	fridgeID, _ := middleware.GetFridgeID(r.Context())
+	history, err := h.service.GetHistory(r.Context(), fridgeID, 50)
+	if err != nil {
+		response.Error(w, http.StatusInternalServerError, err.Error(), "FETCH_HISTORY_FAILED")
+		return
+	}
+	response.JSON(w, http.StatusOK, history)
+}
+
+func (h *Handler) ClearHistory(w http.ResponseWriter, r *http.Request) {
+	fridgeID, _ := middleware.GetFridgeID(r.Context())
+	if err := h.service.ClearHistory(r.Context(), fridgeID); err != nil {
+		response.Error(w, http.StatusInternalServerError, err.Error(), "CLEAR_HISTORY_FAILED")
+		return
+	}
+	response.JSON(w, http.StatusOK, map[string]string{"message": "chat history cleared"})
 }
 
 func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {

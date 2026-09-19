@@ -46,9 +46,46 @@ func (h *Handler) Routes(jwtSecret string) chi.Router {
 	r.Group(func(protected chi.Router) {
 		protected.Use(middleware.Auth(jwtSecret))
 		protected.Get("/me", h.Me)
+		protected.Put("/profile", h.UpdateProfile)
+		protected.Put("/password", h.UpdatePassword)
 	})
 
 	return r
+}
+
+func (h *Handler) UpdateProfile(w http.ResponseWriter, r *http.Request) {
+	userID, _ := middleware.GetUserID(r.Context())
+
+	var input UpdateProfileInput
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		response.Error(w, http.StatusBadRequest, "Invalid request body", "INVALID_REQUEST")
+		return
+	}
+
+	updated, err := h.service.UpdateProfile(r.Context(), userID, input)
+	if err != nil {
+		response.Error(w, http.StatusBadRequest, err.Error(), "UPDATE_PROFILE_FAILED")
+		return
+	}
+
+	response.JSON(w, http.StatusOK, updated)
+}
+
+func (h *Handler) UpdatePassword(w http.ResponseWriter, r *http.Request) {
+	userID, _ := middleware.GetUserID(r.Context())
+
+	var input UpdatePasswordInput
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		response.Error(w, http.StatusBadRequest, "Invalid request body", "INVALID_REQUEST")
+		return
+	}
+
+	if err := h.service.UpdatePassword(r.Context(), userID, input); err != nil {
+		response.Error(w, http.StatusBadRequest, err.Error(), "PASSWORD_CHANGE_FAILED")
+		return
+	}
+
+	response.JSON(w, http.StatusOK, map[string]string{"message": "password updated successfully"})
 }
 
 func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {

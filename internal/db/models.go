@@ -11,6 +11,17 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type ChefMessage struct {
+	ID                  uuid.UUID
+	FridgeID            uuid.UUID
+	UserID              uuid.UUID
+	Role                string
+	Content             string
+	RecipeData          []byte
+	ShoppingSuggestions []byte
+	CreatedAt           time.Time
+}
+
 type Fridge struct {
 	ID        uuid.UUID
 	Name      string
@@ -24,6 +35,24 @@ type FridgeMember struct {
 	UserID   uuid.UUID
 	Role     string
 	JoinedAt time.Time
+}
+
+type MealPlan struct {
+	ID          uuid.UUID
+	FridgeID    uuid.UUID
+	UserID      uuid.UUID
+	Date        pgtype.Date
+	MealType    string
+	RecipeTitle string
+	RecipeID    pgtype.UUID
+	Calories    int32
+	Protein     float64
+	Fat         float64
+	Carbs       float64
+	IsCompleted bool
+	Notes       string
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
 }
 
 type NutritionLog struct {
@@ -100,12 +129,16 @@ type ShoppingItem struct {
 }
 
 type User struct {
-	ID           uuid.UUID
-	Email        string
-	Name         string
-	PasswordHash string
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
+	ID                 uuid.UUID
+	Email              string
+	Name               string
+	PasswordHash       string
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
+	DietaryPreferences string
+	CuisinePreference  string
+	PreferredLanguage  string
+	PreferredModel     string
 }
 
 type UserNutritionGoal struct {

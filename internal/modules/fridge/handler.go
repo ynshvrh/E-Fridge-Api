@@ -30,8 +30,73 @@ func (h *Handler) Routes(jwtSecret string) chi.Router {
 	r.Get("/", h.GetFridges)
 	r.Post("/", h.CreateFridge)
 	r.Get("/{id}", h.GetFridge)
+	r.Post("/{id}/members", h.AddMember)
+	r.Delete("/{id}/members/{userID}", h.RemoveMember)
 
 	return r
+}
+
+func (h *Handler) AddMember(w http.ResponseWriter, r *http.Request) {
+	actorID, _ := middleware.GetUserID(r.Context())
+	fridgeIDStr := chi.URLParam(r, "id")
+	fridgeID, err := uuid.Parse(fridgeIDStr)
+	if err != nil {
+		response.Error(w, http.StatusBadRequest, "Invalid fridge ID", "INVALID_ID")
+		return
+	}
+
+	var body struct {
+		Email string `json:"email"`
+		Role  string `json:"role"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		response.Error(w, http.StatusBadRequest, "Invalid request body", "INVALID_REQUEST")
+		return
+	}
+
+	member, err := h.service.AddMemberByEmail(r.Context(), fridgeID, actorID, body.Email, body.Role)
+	if err != nil {
+		if errors.Is(err, ErrMemberNotFound) {
+			response.Error(w, http.StatusNotFound, "Користувача з таким email не знайдено", "USER_NOT_FOUND")
+			return
+		}
+		if errors.Is(err, ErrNotAuthorized) {
+			response.Error(w, http.StatusForbidden, "Лише власник може додавати учасників", "FORBIDDEN")
+			return
+		}
+		response.Error(w, http.StatusBadRequest, err.Error(), "ADD_MEMBER_FAILED")
+		return
+	}
+
+	response.JSON(w, http.StatusCreated, member)
+}
+
+func (h *Handler) RemoveMember(w http.ResponseWriter, r *http.Request) {
+	actorID, _ := middleware.GetUserID(r.Context())
+	fridgeIDStr := chi.URLParam(r, "id")
+	fridgeID, err := uuid.Parse(fridgeIDStr)
+	if err != nil {
+		response.Error(w, http.StatusBadRequest, "Invalid fridge ID", "INVALID_ID")
+		return
+	}
+
+	targetUserIDStr := chi.URLParam(r, "userID")
+	targetUserID, err := uuid.Parse(targetUserIDStr)
+	if err != nil {
+		response.Error(w, http.StatusBadRequest, "Invalid member user ID", "INVALID_ID")
+		return
+	}
+
+	if err := h.service.RemoveMember(r.Context(), fridgeID, actorID, targetUserID); err != nil {
+		if errors.Is(err, ErrNotAuthorized) {
+			response.Error(w, http.StatusForbidden, "Лише власник може видаляти учасників", "FORBIDDEN")
+			return
+		}
+		response.Error(w, http.StatusInternalServerError, err.Error(), "REMOVE_MEMBER_FAILED")
+		return
+	}
+
+	response.JSON(w, http.StatusOK, map[string]string{"message": "member removed successfully"})
 }
 
 func (h *Handler) GetFridges(w http.ResponseWriter, r *http.Request) {

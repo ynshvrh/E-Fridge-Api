@@ -61,6 +61,9 @@ func (s *Service) Chat(ctx context.Context, fridgeID, userID uuid.UUID, req Chat
 		}
 	}
 
+	// Save user message to DB
+	_ = s.saveMessage(ctx, fridgeID, userID, "user", req.Message, nil, nil)
+
 	var chatRes *ChatResponse
 	if s.cfg.OpenRouterAPIKey != "" {
 		res, err := s.chatWithOpenRouter(ctx, inventory, req)
@@ -78,6 +81,18 @@ func (s *Service) Chat(ctx context.Context, fridgeID, userID uuid.UUID, req Chat
 	// Verify and enforce InFridge against real DB products
 	if chatRes != nil && chatRes.Recipe != nil {
 		s.verifyAndEnrichRecipe(prods, chatRes)
+	}
+
+	// Save assistant message to DB
+	if chatRes != nil {
+		var recBytes, sugBytes []byte
+		if chatRes.Recipe != nil {
+			recBytes, _ = json.Marshal(chatRes.Recipe)
+		}
+		if len(chatRes.ShoppingSuggestions) > 0 {
+			sugBytes, _ = json.Marshal(chatRes.ShoppingSuggestions)
+		}
+		_ = s.saveMessage(ctx, fridgeID, userID, "assistant", chatRes.Reply, recBytes, sugBytes)
 	}
 
 	return chatRes, nil
@@ -168,8 +183,42 @@ func (s *Service) chatWithOpenRouter(ctx context.Context, inventory []string, re
 		"content": req.Message,
 	})
 
-	modelsToTry := s.cfg.OpenRouterModels
-	if len(modelsToTry) == 0 {
+	var modelsToTry []string
+	lowerMsg := strings.ToLower(req.Message)
+	isComplex := strings.Contains(lowerMsg, "рецепт") ||
+		strings.Contains(lowerMsg, "приготу") ||
+		strings.Contains(lowerMsg, "план") ||
+		strings.Contains(lowerMsg, "вечер") ||
+		strings.Contains(lowerMsg, "обід")
+
+	if isComplex {
+		if s.cfg.SmartModel != "" {
+			modelsToTry = append(modelsToTry, s.cfg.SmartModel)
+		}
+		if s.cfg.FastModel != "" {
+			modelsToTry = append(modelsToTry, s.cfg.FastModel)
+		}
+	} else {
+		if s.cfg.FastModel != "" {
+			modelsToTry = append(modelsToTry, s.cfg.FastModel)
+		}
+		if s.cfg.SmartModel != "" {
+			modelsToTry = append(modelsToTry, s.cfg.SmartModel)
+		}
+	}
+	for _, m := range s.cfg.OpenRouterModels {
+		found := false
+		for _, added := range modelsToTry {
+			if added == m {
+				found = true
+				break
+			}
+		}
+		if !found {
+			modelsToTry = append(modelsToTry, m)
+		}
+	}
+	if len(modelsToTry) == 0 && s.cfg.OpenRouterModel != "" {
 		modelsToTry = []string{s.cfg.OpenRouterModel}
 	}
 
@@ -256,4 +305,70 @@ func cleanJSON(s string) string {
 		s = strings.TrimSuffix(s, "```")
 	}
 	return strings.TrimSpace(s)
+}
+
+type ChatMessageDTO struct {
+	ID                  uuid.UUID            `json:"id"`
+	FridgeID            uuid.UUID            `json:"fridge_id"`
+	UserID              uuid.UUID            `json:"user_id"`
+	Role                string               `json:"role"`
+	Content             string               `json:"content"`
+	Recipe              *Recipe              `json:"recipe,omitempty"`
+	ShoppingSuggestions []ShoppingSuggestion `json:"shopping_suggestions,omitempty"`
+	CreatedAt           time.Time            `json:"created_at"`
+}
+
+func (s *Service) saveMessage(ctx context.Context, fridgeID, userID uuid.UUID, role, content string, recData, sugData []byte) error {
+	_, err := s.queries.CreateChefMessage(ctx, db.CreateChefMessageParams{
+		FridgeID:            fridgeID,
+		UserID:              userID,
+		Role:                role,
+		Content:             content,
+		RecipeData:          recData,
+		ShoppingSuggestions: sugData,
+	})
+	return err
+}
+
+func (s *Service) GetHistory(ctx context.Context, fridgeID uuid.UUID, limit int32) ([]ChatMessageDTO, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	msgs, err := s.queries.ListChefMessages(ctx, db.ListChefMessagesParams{
+		FridgeID: fridgeID,
+		Limit:    limit,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	result := make([]ChatMessageDTO, 0, len(msgs))
+	for _, m := range msgs {
+		dto := ChatMessageDTO{
+			ID:        m.ID,
+			FridgeID:  m.FridgeID,
+			UserID:    m.UserID,
+			Role:      m.Role,
+			Content:   m.Content,
+			CreatedAt: m.CreatedAt,
+		}
+		if len(m.RecipeData) > 0 {
+			var rec Recipe
+			if err := json.Unmarshal(m.RecipeData, &rec); err == nil {
+				dto.Recipe = &rec
+			}
+		}
+		if len(m.ShoppingSuggestions) > 0 {
+			var sugs []ShoppingSuggestion
+			if err := json.Unmarshal(m.ShoppingSuggestions, &sugs); err == nil {
+				dto.ShoppingSuggestions = sugs
+			}
+		}
+		result = append(result, dto)
+	}
+	return result, nil
+}
+
+func (s *Service) ClearHistory(ctx context.Context, fridgeID uuid.UUID) error {
+	return s.queries.ClearChefMessages(ctx, fridgeID)
 }

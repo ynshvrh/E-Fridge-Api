@@ -36,10 +36,27 @@ func NewService(queries *db.Queries, cfg *config.Config) *Service {
 }
 
 type UserDTO struct {
-	ID        uuid.UUID `json:"id"`
-	Email     string    `json:"email"`
-	Name      string    `json:"name"`
-	CreatedAt time.Time `json:"created_at"`
+	ID                 uuid.UUID `json:"id"`
+	Email              string    `json:"email"`
+	Name               string    `json:"name"`
+	DietaryPreferences string    `json:"dietary_preferences"`
+	CuisinePreference  string    `json:"cuisine_preference"`
+	PreferredLanguage  string    `json:"preferred_language"`
+	PreferredModel     string    `json:"preferred_model"`
+	CreatedAt          time.Time `json:"created_at"`
+}
+
+type UpdateProfileInput struct {
+	Name               string `json:"name"`
+	DietaryPreferences string `json:"dietary_preferences"`
+	CuisinePreference  string `json:"cuisine_preference"`
+	PreferredLanguage  string `json:"preferred_language"`
+	PreferredModel     string `json:"preferred_model"`
+}
+
+type UpdatePasswordInput struct {
+	OldPassword string `json:"old_password"`
+	NewPassword string `json:"new_password"`
 }
 
 type FridgeDTO struct {
@@ -270,7 +287,7 @@ func (s *Service) Logout(ctx context.Context, rawRefreshToken string) error {
 }
 
 func (s *Service) GetMe(ctx context.Context, userID uuid.UUID) (*UserDTO, []FridgeDTO, error) {
-	user, err := s.queries.GetUserByID(ctx, userID)
+	user, err := s.queries.GetUserFullByID(ctx, userID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, nil, ErrUserNotFound
@@ -293,9 +310,68 @@ func (s *Service) GetMe(ctx context.Context, userID uuid.UUID) (*UserDTO, []Frid
 	}
 
 	return &UserDTO{
-		ID:        user.ID,
-		Email:     user.Email,
-		Name:      user.Name,
-		CreatedAt: user.CreatedAt,
+		ID:                 user.ID,
+		Email:              user.Email,
+		Name:               user.Name,
+		DietaryPreferences: user.DietaryPreferences,
+		CuisinePreference:  user.CuisinePreference,
+		PreferredLanguage:  user.PreferredLanguage,
+		PreferredModel:     user.PreferredModel,
+		CreatedAt:          user.CreatedAt,
 	}, fridgeDTOs, nil
+}
+
+func (s *Service) UpdateProfile(ctx context.Context, userID uuid.UUID, input UpdateProfileInput) (*UserDTO, error) {
+	name := strings.TrimSpace(input.Name)
+	if name == "" {
+		return nil, errors.New("name cannot be empty")
+	}
+
+	u, err := s.queries.UpdateUserProfile(ctx, db.UpdateUserProfileParams{
+		ID:                 userID,
+		Name:               name,
+		DietaryPreferences: input.DietaryPreferences,
+		CuisinePreference:  input.CuisinePreference,
+		PreferredLanguage:  input.PreferredLanguage,
+		PreferredModel:     input.PreferredModel,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to update profile: %w", err)
+	}
+
+	return &UserDTO{
+		ID:                 u.ID,
+		Email:              u.Email,
+		Name:               u.Name,
+		DietaryPreferences: u.DietaryPreferences,
+		CuisinePreference:  u.CuisinePreference,
+		PreferredLanguage:  u.PreferredLanguage,
+		PreferredModel:     u.PreferredModel,
+		CreatedAt:          u.CreatedAt,
+	}, nil
+}
+
+func (s *Service) UpdatePassword(ctx context.Context, userID uuid.UUID, input UpdatePasswordInput) error {
+	if len(input.NewPassword) < 6 {
+		return errors.New("new password must be at least 6 characters")
+	}
+
+	stored, err := s.queries.GetUserPasswordByID(ctx, userID)
+	if err != nil {
+		return ErrUserNotFound
+	}
+
+	if !crypto.CheckPassword(input.OldPassword, stored.PasswordHash) {
+		return errors.New("incorrect old password")
+	}
+
+	newHash, err := crypto.HashPassword(input.NewPassword)
+	if err != nil {
+		return err
+	}
+
+	return s.queries.UpdateUserPassword(ctx, db.UpdateUserPasswordParams{
+		ID:           userID,
+		PasswordHash: newHash,
+	})
 }
