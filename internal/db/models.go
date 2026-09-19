@@ -68,6 +68,37 @@ type RefreshToken struct {
 	CreatedAt time.Time
 }
 
+type SavedRecipe struct {
+	ID           uuid.UUID
+	UserID       uuid.UUID
+	FridgeID     pgtype.UUID
+	Title        string
+	Description  string
+	Ingredients  []byte
+	Steps        []byte
+	Calories     int32
+	Protein      float64
+	Fat          float64
+	Carbs        float64
+	PrepTimeMins int32
+	CookTimeMins int32
+	Servings     int32
+	CreatedAt    time.Time
+}
+
+type ShoppingItem struct {
+	ID        uuid.UUID
+	FridgeID  uuid.UUID
+	Name      string
+	Category  string
+	Quantity  float64
+	Unit      string
+	IsBought  bool
+	CreatedBy uuid.UUID
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
 type User struct {
 	ID           uuid.UUID
 	Email        string

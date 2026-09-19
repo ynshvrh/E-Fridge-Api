@@ -23,6 +23,8 @@ import (
 	"github.com/ynshvrh/E-Fridge-Api/internal/modules/fridge"
 	"github.com/ynshvrh/E-Fridge-Api/internal/modules/nutrition"
 	"github.com/ynshvrh/E-Fridge-Api/internal/modules/products"
+	"github.com/ynshvrh/E-Fridge-Api/internal/modules/recipes"
+	"github.com/ynshvrh/E-Fridge-Api/internal/modules/shopping"
 	"github.com/ynshvrh/E-Fridge-Api/internal/pkg/response"
 )
 
@@ -67,6 +69,12 @@ func main() {
 	chefService := chef.NewService(queries, cfg)
 	chefHandler := chef.NewHandler(chefService)
 
+	shoppingService := shopping.NewService(queries, productsService)
+	shoppingHandler := shopping.NewHandler(shoppingService)
+
+	recipesService := recipes.NewService(queries)
+	recipesHandler := recipes.NewHandler(recipesService)
+
 	// 5. Router
 	r := chi.NewRouter()
 
@@ -102,6 +110,8 @@ func main() {
 		api.Mount("/nutrition", nutritionHandler.Routes(cfg.JWTSecret))
 		api.Mount("/cooking", cookingHandler.Routes(cfg.JWTSecret, queries))
 		api.Mount("/chef", chefHandler.Routes(cfg.JWTSecret, queries))
+		api.Mount("/shopping", shoppingHandler.Routes(cfg.JWTSecret, queries))
+		api.Mount("/recipes", recipesHandler.Routes(cfg.JWTSecret))
 	})
 
 	// 6. HTTP Server
