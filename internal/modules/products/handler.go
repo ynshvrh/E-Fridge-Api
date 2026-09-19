@@ -27,21 +27,26 @@ type ConsumeRequest struct {
 func (h *Handler) Routes(jwtSecret string, queries *db.Queries) chi.Router {
 	r := chi.NewRouter()
 
-	r.Use(middleware.Auth(jwtSecret))
+	// Categories metadata does not require authentication
 	r.Get("/categories", h.Categories)
 
-	// All following routes require a valid fridge context (X-Fridge-Id header)
-	r.Group(func(fridgeRouter chi.Router) {
-		fridgeRouter.Use(middleware.RequireFridge(queries))
+	// Protected product routes
+	r.Group(func(authRouter chi.Router) {
+		authRouter.Use(middleware.Auth(jwtSecret))
 
-		fridgeRouter.Get("/", h.List)
-		fridgeRouter.Post("/", h.Create)
-		fridgeRouter.Delete("/", h.Clear)
+		// All following routes require a valid fridge context (X-Fridge-Id header)
+		authRouter.Group(func(fridgeRouter chi.Router) {
+			fridgeRouter.Use(middleware.RequireFridge(queries))
 
-		fridgeRouter.Get("/{id}", h.Get)
-		fridgeRouter.Put("/{id}", h.Update)
-		fridgeRouter.Delete("/{id}", h.Delete)
-		fridgeRouter.Post("/{id}/consume", h.Consume)
+			fridgeRouter.Get("/", h.List)
+			fridgeRouter.Post("/", h.Create)
+			fridgeRouter.Delete("/", h.Clear)
+
+			fridgeRouter.Get("/{id}", h.Get)
+			fridgeRouter.Put("/{id}", h.Update)
+			fridgeRouter.Delete("/{id}", h.Delete)
+			fridgeRouter.Post("/{id}/consume", h.Consume)
+		})
 	})
 
 	return r

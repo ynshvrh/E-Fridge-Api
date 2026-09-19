@@ -4,13 +4,17 @@ import (
 	"testing"
 
 	"github.com/ynshvrh/E-Fridge-Api/internal/config"
+	"github.com/ynshvrh/E-Fridge-Api/internal/db"
 )
 
 func TestChefFallback(t *testing.T) {
 	svc := NewService(nil, &config.Config{})
 
-	inventory := []string{"Яйця (6 шт)", "Сир (200 г)"}
-	res := svc.chatFallback(inventory, ChatRequest{Message: "Що можна приготувати?"})
+	products := []db.Product{
+		{Name: "Яйця", Quantity: 6, Unit: "шт"},
+		{Name: "Сир", Quantity: 200, Unit: "г"},
+	}
+	res := svc.chatFallback(products, ChatRequest{Message: "Що можна приготувати?"})
 
 	if res == nil || res.Recipe == nil {
 		t.Fatalf("expected recipe from fallback, got nil")

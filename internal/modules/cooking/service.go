@@ -100,15 +100,7 @@ func (s *Service) CookRecipe(ctx context.Context, fridgeID, userID uuid.UUID, in
 		totalCarbs += c
 
 		// Find match in fridge
-		var match *db.Product
-		for i := range fridgeProds {
-			pName := strings.ToLower(fridgeProds[i].Name)
-			iName := strings.ToLower(ing.Name)
-			if strings.Contains(pName, iName) || strings.Contains(iName, pName) {
-				match = &fridgeProds[i]
-				break
-			}
-		}
+		match := FindFridgeProductMatch(ing.Name, fridgeProds)
 
 		if match == nil {
 			missing = append(missing, fmt.Sprintf("%s (%v %s)", ing.Name, ing.Quantity, ing.Unit))
@@ -310,4 +302,71 @@ func convertUnits(qty float64, fromUnit, toUnit string) float64 {
 
 func round2(val float64) float64 {
 	return float64(int(val*100+0.5)) / 100
+}
+
+// FindFridgeProductMatch searches for a matching product in the fridge inventory using substring and synonyms.
+func FindFridgeProductMatch(ingName string, prods []db.Product) *db.Product {
+	iName := strings.ToLower(strings.TrimSpace(ingName))
+	if iName == "" {
+		return nil
+	}
+
+	// 1. Direct or Substring match
+	for i := range prods {
+		if prods[i].Quantity <= 0 {
+			continue
+		}
+		pName := strings.ToLower(strings.TrimSpace(prods[i].Name))
+		if pName == iName || strings.Contains(pName, iName) || strings.Contains(iName, pName) {
+			return &prods[i]
+		}
+	}
+
+	// 2. Word-by-word match
+	iWords := strings.Fields(iName)
+	for i := range prods {
+		if prods[i].Quantity <= 0 {
+			continue
+		}
+		pName := strings.ToLower(strings.TrimSpace(prods[i].Name))
+		pWords := strings.Fields(pName)
+		for _, iw := range iWords {
+			if len(iw) < 3 {
+				continue
+			}
+			for _, pw := range pWords {
+				if len(pw) < 3 {
+					continue
+				}
+				if strings.HasPrefix(pw, iw) || strings.HasPrefix(iw, pw) {
+					return &prods[i]
+				}
+			}
+		}
+	}
+
+	// 3. Common Ukrainian food synonyms
+	synonyms := map[string][]string{
+		"томат":    {"помідор", "помідори", "томати", "чері"},
+		"помідор":  {"томат", "томати", "помідори", "чері"},
+		"сир":      {"моцарела", "пармезан", "сулугуні", "фета", "творог", "кисломолочний"},
+		"моцарела": {"сир", "моцарелла"},
+		"овочі":    {"помідор", "помідори", "огірок", "огірки", "перець", "салат", "зелень", "капуста"},
+		"курка":    {"філе", "куряче", "грудка", "курятина"},
+		"філе":     {"курка", "куряче", "індичка"},
+	}
+
+	for key, synList := range synonyms {
+		if strings.Contains(iName, key) {
+			for _, syn := range synList {
+				for i := range prods {
+					if prods[i].Quantity > 0 && strings.Contains(strings.ToLower(prods[i].Name), syn) {
+						return &prods[i]
+					}
+				}
+			}
+		}
+	}
+
+	return nil
 }

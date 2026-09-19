@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/ynshvrh/E-Fridge-Api/internal/config"
 	"github.com/ynshvrh/E-Fridge-Api/internal/db"
+	"github.com/ynshvrh/E-Fridge-Api/internal/modules/cooking"
 )
 
 type Service struct {
@@ -48,18 +49,70 @@ func (s *Service) getFridgeInventoryStrings(ctx context.Context, fridgeID uuid.U
 }
 
 func (s *Service) Chat(ctx context.Context, fridgeID, userID uuid.UUID, req ChatRequest) (*ChatResponse, error) {
-	inventory := s.getFridgeInventoryStrings(ctx, fridgeID)
+	prods, err := s.queries.ListProductsByFridge(ctx, fridgeID)
+	if err != nil {
+		prods = []db.Product{}
+	}
 
+	inventory := make([]string, 0, len(prods))
+	for _, p := range prods {
+		if p.Quantity > 0 {
+			inventory = append(inventory, fmt.Sprintf("%s (%v %s)", p.Name, p.Quantity, p.Unit))
+		}
+	}
+
+	var chatRes *ChatResponse
 	if s.cfg.OpenRouterAPIKey != "" {
 		res, err := s.chatWithOpenRouter(ctx, inventory, req)
 		if err == nil && res != nil {
-			return res, nil
+			chatRes = res
+		} else {
+			slog.Warn("OpenRouter chat failed, using fallback", "error", err)
 		}
-		slog.Warn("OpenRouter chat failed, using fallback", "error", err)
 	}
 
-	// Fallback
-	return s.chatFallback(inventory, req), nil
+	if chatRes == nil {
+		chatRes = s.chatFallback(prods, req)
+	}
+
+	// Verify and enforce InFridge against real DB products
+	if chatRes != nil && chatRes.Recipe != nil {
+		s.verifyAndEnrichRecipe(prods, chatRes)
+	}
+
+	return chatRes, nil
+}
+
+func (s *Service) verifyAndEnrichRecipe(prods []db.Product, chatRes *ChatResponse) {
+	recipe := chatRes.Recipe
+	if recipe == nil {
+		return
+	}
+
+	existingSuggestions := make(map[string]bool)
+	for _, sug := range chatRes.ShoppingSuggestions {
+		existingSuggestions[strings.ToLower(strings.TrimSpace(sug.Name))] = true
+	}
+
+	for i := range recipe.Ingredients {
+		ing := &recipe.Ingredients[i]
+		match := cooking.FindFridgeProductMatch(ing.Name, prods)
+		if match != nil && match.Quantity > 0 {
+			ing.InFridge = true
+		} else {
+			ing.InFridge = false
+			cleanName := strings.ToLower(strings.TrimSpace(ing.Name))
+			if !existingSuggestions[cleanName] {
+				chatRes.ShoppingSuggestions = append(chatRes.ShoppingSuggestions, ShoppingSuggestion{
+					Name:     ing.Name,
+					Quantity: ing.Quantity,
+					Unit:     ing.Unit,
+					Category: ing.Category,
+				})
+				existingSuggestions[cleanName] = true
+			}
+		}
+	}
 }
 
 func (s *Service) GenerateRecipe(ctx context.Context, fridgeID, userID uuid.UUID, req GenerateRecipeRequest) (*Recipe, error) {
@@ -83,7 +136,10 @@ func (s *Service) GenerateRecipe(ctx context.Context, fridgeID, userID uuid.UUID
 		return chatRes.Recipe, nil
 	}
 
-	fallback := s.generateFallbackRecipe(s.getFridgeInventoryStrings(ctx, fridgeID))
+	prods, _ := s.queries.ListProductsByFridge(ctx, fridgeID)
+	fallback := s.generateFallbackRecipe(prods)
+	dummyRes := &ChatResponse{Recipe: &fallback}
+	s.verifyAndEnrichRecipe(prods, dummyRes)
 	return &fallback, nil
 }
 
