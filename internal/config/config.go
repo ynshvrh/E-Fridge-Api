@@ -19,11 +19,13 @@ type Config struct {
 	AllowedOrigins   []string
 	Environment      string
 	OpenRouterAPIKey string
-	OpenRouterModel  string
-	OpenRouterModels []string
+	FreeModel        string
+	FallbackModel    string
 	FastModel        string
 	CheapModel       string
 	SmartModel       string
+	OpenRouterModel  string
+	OpenRouterModels []string
 }
 
 func Load() *Config {
@@ -45,18 +47,8 @@ func Load() *Config {
 	}
 
 	openRouterKey := getEnv("OPENROUTER_API_KEY", "")
-	openRouterModel := getEnv("OPENROUTER_MODEL", "meta-llama/llama-3.3-70b-instruct:free")
-	fastModel := getEnv("OPENROUTER_FAST_MODEL", "meta-llama/llama-3.3-70b-instruct:free")
-	cheapModel := getEnv("OPENROUTER_CHEAP_MODEL", "deepseek/deepseek-chat")
-	smartModel := getEnv("OPENROUTER_SMART_MODEL", "deepseek/deepseek-chat")
-	modelsRaw := getEnv("OPENROUTER_MODELS", "meta-llama/llama-3.3-70b-instruct:free,deepseek/deepseek-chat")
-	var openRouterModels []string
-	for _, m := range strings.Split(modelsRaw, ",") {
-		trimmed := strings.TrimSpace(m)
-		if trimmed != "" {
-			openRouterModels = append(openRouterModels, trimmed)
-		}
-	}
+	freeModel := getEnv("OPENROUTER_FREE_MODEL", getEnv("OPENROUTER_FAST_MODEL", "meta-llama/llama-3.3-70b-instruct:free"))
+	fallbackModel := getEnv("OPENROUTER_FALLBACK_MODEL", getEnv("OPENROUTER_CHEAP_MODEL", "deepseek/deepseek-chat"))
 
 	if env == "production" && len(jwtSecret) < 32 {
 		log.Fatal("JWT_SECRET must be at least 32 characters in production")
@@ -71,11 +63,13 @@ func Load() *Config {
 		AllowedOrigins:   origins,
 		Environment:      env,
 		OpenRouterAPIKey: openRouterKey,
-		OpenRouterModel:  openRouterModel,
-		OpenRouterModels: openRouterModels,
-		FastModel:        fastModel,
-		CheapModel:       cheapModel,
-		SmartModel:       smartModel,
+		FreeModel:        freeModel,
+		FallbackModel:    fallbackModel,
+		FastModel:        freeModel,
+		CheapModel:       fallbackModel,
+		SmartModel:       fallbackModel,
+		OpenRouterModel:  freeModel,
+		OpenRouterModels: []string{freeModel, fallbackModel},
 	}
 }
 
