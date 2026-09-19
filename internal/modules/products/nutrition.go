@@ -400,6 +400,31 @@ func (s *Service) heuristicNutritionEstimate(name, unit string, qty float64) *Nu
 	stdUnit := "г"
 
 	switch {
+	case strings.Contains(lower, "майонез"):
+		calories = 624
+		protein = 0.9
+		fat = 67.0
+		carbs = 2.8
+		cat = "sauces"
+	case strings.Contains(lower, "масло") && !strings.Contains(lower, "олія"):
+		calories = 748
+		protein = 0.8
+		fat = 82.5
+		carbs = 0.8
+		cat = "dairy"
+	case strings.Contains(lower, "олія") || strings.Contains(lower, "масло рослин"):
+		calories = 899
+		protein = 0.0
+		fat = 99.9
+		carbs = 0.0
+		cat = "sauces"
+		stdUnit = "мл"
+	case strings.Contains(lower, "сметан"):
+		calories = 206
+		protein = 2.8
+		fat = 20.0
+		carbs = 3.2
+		cat = "dairy"
 	case strings.Contains(lower, "яйц"):
 		calories = 143
 		protein = 12.6
@@ -416,6 +441,12 @@ func (s *Service) heuristicNutritionEstimate(name, unit string, qty float64) *Nu
 		protein = 26.0
 		fat = 17.0
 		carbs = 0.0
+	case strings.Contains(lower, "ковбас") || strings.Contains(lower, "сосиск"):
+		calories = 260
+		protein = 13.0
+		fat = 23.0
+		carbs = 1.0
+		cat = "meat-fish"
 	case strings.Contains(lower, "молок"):
 		calories = 54
 		protein = 2.9
@@ -437,6 +468,12 @@ func (s *Service) heuristicNutritionEstimate(name, unit string, qty float64) *Nu
 		protein = 2.7
 		fat = 0.3
 		carbs = 28.0
+	case strings.Contains(lower, "макарон") || strings.Contains(lower, "паста"):
+		calories = 157
+		protein = 5.8
+		fat = 0.9
+		carbs = 31.0
+		cat = "pantry"
 	case strings.Contains(lower, "яблук"):
 		calories = 52
 		protein = 0.3
@@ -452,11 +489,29 @@ func (s *Service) heuristicNutritionEstimate(name, unit string, qty float64) *Nu
 		protein = 9.0
 		fat = 3.2
 		carbs = 49.0
-	case strings.Contains(lower, "огірок") || strings.Contains(lower, "помідор") || strings.Contains(lower, "томат"):
+	case strings.Contains(lower, "огір") || strings.Contains(lower, "помідор") || strings.Contains(lower, "томат"):
 		calories = 18
 		protein = 0.9
 		fat = 0.2
 		carbs = 3.9
+	case strings.Contains(lower, "картоп"):
+		calories = 77
+		protein = 2.0
+		fat = 0.1
+		carbs = 17.5
+		cat = "vegetables"
+	case strings.Contains(lower, "кетчуп"):
+		calories = 100
+		protein = 1.5
+		fat = 0.2
+		carbs = 23.0
+		cat = "sauces"
+	case strings.Contains(lower, "шоколад"):
+		calories = 545
+		protein = 5.5
+		fat = 31.0
+		carbs = 60.0
+		cat = "snacks"
 	}
 
 	return &NutritionEstimate{
