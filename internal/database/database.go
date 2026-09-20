@@ -5,6 +5,7 @@ import (
 	"embed"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -24,7 +25,7 @@ func Connect(ctx context.Context, databaseURL string) (*DB, error) {
 	}
 
 	config.MaxConns = 25
-	config.MinConns = 2
+	config.MinConns = 5
 	config.MaxConnLifetime = 1 * time.Hour
 	config.MaxConnIdleTime = 30 * time.Minute
 
@@ -57,7 +58,7 @@ func (db *DB) RunMigrations(ctx context.Context) error {
 	}
 
 	for _, entry := range entries {
-		if entry.IsDir() {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".up.sql") {
 			continue
 		}
 
