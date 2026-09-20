@@ -33,6 +33,10 @@ type ResendCodeRequest struct {
 	Email string `json:"email"`
 }
 
+type GoogleAuthRequest struct {
+	IDToken string `json:"id_token"`
+}
+
 type LoginRequest struct {
 	Email    string `json:"email"`
 	Password string `json:"password"`
@@ -49,6 +53,7 @@ func (h *Handler) Routes(jwtSecret string) chi.Router {
 	r.Post("/register", h.Register)
 	r.Post("/register/confirm", h.ConfirmRegistration)
 	r.Post("/register/resend", h.ResendCode)
+	r.Post("/google", h.GoogleAuth)
 	r.Post("/login", h.Login)
 	r.Post("/refresh", h.Refresh)
 	r.Post("/logout", h.Logout)
@@ -173,6 +178,22 @@ func (h *Handler) ResendCode(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		response.Error(w, http.StatusInternalServerError, err.Error(), "INTERNAL_ERROR")
+		return
+	}
+
+	response.JSON(w, http.StatusOK, result)
+}
+
+func (h *Handler) GoogleAuth(w http.ResponseWriter, r *http.Request) {
+	var req GoogleAuthRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		response.Error(w, http.StatusBadRequest, "Invalid request body", "INVALID_REQUEST")
+		return
+	}
+
+	result, err := h.service.SignInWithGoogle(r.Context(), req.IDToken)
+	if err != nil {
+		response.Error(w, http.StatusBadRequest, err.Error(), "GOOGLE_AUTH_FAILED")
 		return
 	}
 

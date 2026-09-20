@@ -21,6 +21,7 @@ import (
 
 type Mailer interface {
 	SendVerificationEmail(ctx context.Context, toEmail, name, code string) error
+	SendGoogleWelcomeEmail(ctx context.Context, toEmail, name, generatedPassword string) error
 }
 
 func NewMailer(cfg *config.Config) Mailer {
@@ -85,7 +86,35 @@ func (m *SMTPMailer) SendVerificationEmail(ctx context.Context, toEmail, name, c
 
 	subject := fmt.Sprintf("Код підтвердження E-Fridge: %s", code)
 	htmlBody := buildVerificationHTML(displayName, code)
+	return m.sendRawEmail(toEmail, subject, htmlBody)
+}
 
+func (m *SMTPMailer) SendGoogleWelcomeEmail(ctx context.Context, toEmail, name, generatedPassword string) error {
+	toEmail = strings.TrimSpace(toEmail)
+	if toEmail == "" {
+		return errors.New("recipient email is required")
+	}
+
+	if m.user == "" || m.password == "" {
+		slog.Warn("SMTP credentials not configured, logging generated Google password for development",
+			"recipient", toEmail, "generated_password", generatedPassword)
+		if m.environment == "production" {
+			return errors.New("SMTP credentials are not configured")
+		}
+		return nil
+	}
+
+	displayName := name
+	if displayName == "" {
+		displayName = "користувачу"
+	}
+
+	subject := "Ваш акаунт E-Fridge створено через Google"
+	htmlBody := buildGoogleWelcomeHTML(displayName, generatedPassword)
+	return m.sendRawEmail(toEmail, subject, htmlBody)
+}
+
+func (m *SMTPMailer) sendRawEmail(toEmail, subject, htmlBody string) error {
 	msg := bytes.NewBuffer(nil)
 	msg.WriteString(fmt.Sprintf("From: %s\r\n", m.fromEmail))
 	msg.WriteString(fmt.Sprintf("To: %s\r\n", toEmail))
@@ -103,14 +132,12 @@ func (m *SMTPMailer) SendVerificationEmail(ctx context.Context, toEmail, name, c
 	if err != nil {
 		slog.Error("Failed to send email via SMTP", "error", err, "recipient", toEmail)
 		if m.environment == "development" {
-			slog.Warn("Development fallback: logging code due to SMTP delivery failure",
-				"recipient", toEmail, "code", code, "error", err)
 			return nil
 		}
 		return fmt.Errorf("failed to send email via SMTP: %w", err)
 	}
 
-	slog.Info("Verification email sent successfully via SMTP", "recipient", toEmail, "sender", m.user)
+	slog.Info("Email sent successfully via SMTP", "recipient", toEmail, "sender", m.user)
 	return nil
 }
 
@@ -152,27 +179,39 @@ type resendResponse struct {
 }
 
 func (m *ResendMailer) SendVerificationEmail(ctx context.Context, toEmail, name, code string) error {
+	displayName := name
+	if displayName == "" {
+		displayName = "користувачу"
+	}
+	subject := fmt.Sprintf("Код підтвердження E-Fridge: %s", code)
+	htmlBody := buildVerificationHTML(displayName, code)
+	return m.sendResend(ctx, toEmail, subject, htmlBody, code)
+}
+
+func (m *ResendMailer) SendGoogleWelcomeEmail(ctx context.Context, toEmail, name, generatedPassword string) error {
+	displayName := name
+	if displayName == "" {
+		displayName = "користувачу"
+	}
+	subject := "Ваш акаунт E-Fridge створено через Google"
+	htmlBody := buildGoogleWelcomeHTML(displayName, generatedPassword)
+	return m.sendResend(ctx, toEmail, subject, htmlBody, generatedPassword)
+}
+
+func (m *ResendMailer) sendResend(ctx context.Context, toEmail, subject, htmlBody, devLogParam string) error {
 	toEmail = strings.TrimSpace(toEmail)
 	if toEmail == "" {
 		return errors.New("recipient email is required")
 	}
 
 	if m.apiKey == "" {
-		slog.Warn("RESEND_API_KEY is not configured, logging verification code for development",
-			"recipient", toEmail, "code", code)
+		slog.Warn("RESEND_API_KEY is not configured, logging for development",
+			"recipient", toEmail, "param", devLogParam)
 		if m.environment == "production" {
 			return errors.New("email service is not configured")
 		}
 		return nil
 	}
-
-	displayName := name
-	if displayName == "" {
-		displayName = "користувачу"
-	}
-
-	subject := fmt.Sprintf("Код підтвердження E-Fridge: %s", code)
-	htmlBody := buildVerificationHTML(displayName, code)
 
 	reqPayload := resendRequest{
 		From:    m.fromEmail,
@@ -197,11 +236,11 @@ func (m *ResendMailer) SendVerificationEmail(ctx context.Context, toEmail, name,
 	if err != nil {
 		slog.Error("Failed to call Resend API", "error", err, "recipient", toEmail)
 		if m.environment == "development" {
-			slog.Warn("Development fallback: logging verification code due to network failure",
-				"recipient", toEmail, "code", code)
+			slog.Warn("Development fallback: logging due to network failure",
+				"recipient", toEmail, "param", devLogParam)
 			return nil
 		}
-		return fmt.Errorf("failed to send verification email: %w", err)
+		return fmt.Errorf("failed to send email: %w", err)
 	}
 	defer resp.Body.Close()
 
@@ -210,7 +249,7 @@ func (m *ResendMailer) SendVerificationEmail(ctx context.Context, toEmail, name,
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		var resendResp resendResponse
 		_ = json.Unmarshal(respBody, &resendResp)
-		slog.Info("Verification email sent via Resend", "recipient", toEmail, "resend_id", resendResp.ID)
+		slog.Info("Email sent via Resend", "recipient", toEmail, "resend_id", resendResp.ID)
 		return nil
 	}
 
@@ -220,8 +259,8 @@ func (m *ResendMailer) SendVerificationEmail(ctx context.Context, toEmail, name,
 	// Resend free tier unverified domain restriction handling:
 	if resp.StatusCode == http.StatusForbidden && strings.Contains(strings.ToLower(resendErr.Message), "testing emails to your own email address") {
 		if m.environment == "development" {
-			slog.Warn("Resend test-domain restriction hit; logging verification code for development",
-				"recipient", toEmail, "code", code, "resend_message", resendErr.Message)
+			slog.Warn("Resend test-domain restriction hit; logging for development",
+				"recipient", toEmail, "param", devLogParam, "resend_message", resendErr.Message)
 			return nil
 		}
 	}
@@ -264,10 +303,59 @@ func buildVerificationHTML(name, code string) string {
 </html>`, name, code)
 }
 
+func buildGoogleWelcomeHTML(name, password string) string {
+	return fmt.Sprintf(`<!DOCTYPE html>
+<html lang="uk">
+<head>
+  <meta charset="utf-8">
+  <title>Ваш пароль для входу в E-Fridge</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #fafaf9; margin: 0; padding: 24px; color: #1c1917; }
+    .card { max-width: 480px; margin: 0 auto; background: #ffffff; border-radius: 24px; padding: 36px 32px; border: 1px solid #e7e5e4; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05); }
+    .badge { width: 56px; height: 56px; margin: 0 auto 20px; border-radius: 18px; background: #ecfdf5; border: 1px solid #a7f3d0; text-align: center; line-height: 56px; font-size: 28px; }
+    h1 { font-size: 22px; font-weight: 700; text-align: center; color: #1c1917; margin: 0 0 8px 0; }
+    p { font-size: 14px; line-height: 1.6; color: #57534e; text-align: center; margin: 0 0 24px 0; }
+    .code-box { background: #f0fdf4; border: 2px dashed #86efac; border-radius: 16px; padding: 18px 24px; text-align: center; margin: 28px 0; }
+    .code { font-size: 22px; font-weight: 700; letter-spacing: 2px; color: #15803d; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+    .note { font-size: 13px; color: #78716c; margin-top: 24px; }
+    .footer { font-size: 12px; color: #a8a29e; text-align: center; margin-top: 32px; border-top: 1px solid #f5f5f4; padding-top: 16px; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="badge">🥦</div>
+    <h1>Вітаємо у E-Fridge!</h1>
+    <p>Ви успішно зареєструвалися через Google-акаунт, <strong>%s</strong>.<br>Для прямого входу за логіном та паролем (якщо знадобиться) ми створили для вас пароль:</p>
+    <div class="code-box">
+      <div class="code">%s</div>
+    </div>
+    <p class="note">Ви можете змінити цей пароль у будь-який момент у налаштуваннях свого профілю.</p>
+    <div class="footer">&copy; E-Fridge Ecosystem</div>
+  </div>
+</body>
+</html>`, name, password)
+}
+
 func GenerateVerificationCode() (string, error) {
 	n, err := rand.Int(rand.Reader, big.NewInt(900000))
 	if err != nil {
 		return "", err
 	}
 	return fmt.Sprintf("%06d", n.Int64()+100000), nil
+}
+
+func GenerateSecurePassword(length int) (string, error) {
+	if length < 8 {
+		length = 12
+	}
+	const charset = "abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789!@#$%&*"
+	bytes := make([]byte, length)
+	for i := range bytes {
+		n, err := rand.Int(rand.Reader, big.NewInt(int64(len(charset))))
+		if err != nil {
+			return "", err
+		}
+		bytes[i] = charset[n.Int64()]
+	}
+	return string(bytes), nil
 }

@@ -65,10 +65,10 @@ func TestRegisterValidation(t *testing.T) {
 		t.Errorf("expected error for invalid email")
 	}
 
-	// Short password
-	_, err = s.Register(context.Background(), "test@example.com", "Name", "123")
+	// Short password (< 8 chars)
+	_, err = s.Register(context.Background(), "test@example.com", "Name", "1234567")
 	if err == nil {
-		t.Errorf("expected error for short password")
+		t.Errorf("expected error for short password (< 8 characters)")
 	}
 
 	// Empty name
@@ -123,6 +123,11 @@ type mockMailer struct {
 		name    string
 		code    string
 	}
+	sentWelcomeEmails []struct {
+		toEmail  string
+		name     string
+		password string
+	}
 }
 
 func (m *mockMailer) SendVerificationEmail(ctx context.Context, toEmail, name, code string) error {
@@ -131,6 +136,15 @@ func (m *mockMailer) SendVerificationEmail(ctx context.Context, toEmail, name, c
 		name    string
 		code    string
 	}{toEmail, name, code})
+	return nil
+}
+
+func (m *mockMailer) SendGoogleWelcomeEmail(ctx context.Context, toEmail, name, generatedPassword string) error {
+	m.sentWelcomeEmails = append(m.sentWelcomeEmails, struct {
+		toEmail  string
+		name     string
+		password string
+	}{toEmail, name, generatedPassword})
 	return nil
 }
 
@@ -246,4 +260,75 @@ func TestRegistrationFullFlowWithDB(t *testing.T) {
 		_ = queries.DeleteFridge(ctx, authRes.Fridges[0].ID)
 	}
 	_, _ = pool.Exec(ctx, "DELETE FROM users WHERE email = $1", testEmail)
+}
+
+func TestSignInWithGoogleNewUser(t *testing.T) {
+	ctx := context.Background()
+	dbURL := "postgres://postgres:postgrespassword@localhost:5432/e_fridge?sslmode=disable"
+
+	pool, err := pgx.Connect(ctx, dbURL)
+	if err != nil {
+		t.Skip("skipping DB test, cannot connect to PostgreSQL")
+		return
+	}
+	defer pool.Close(ctx)
+
+	queries := db.New(pool)
+	cfg := &config.Config{
+		JWTSecret:       "test-secret-key-12345678901234567890",
+		AccessTokenTTL:  15 * time.Minute,
+		RefreshTokenTTL: 30 * 24 * time.Hour,
+		Environment:     "test",
+	}
+
+	service := NewService(queries, cfg)
+	mailer := &mockMailer{}
+	service.SetMailer(mailer)
+
+	googleEmail := "google_user_" + uuid.New().String()[:8] + "@gmail.com"
+	mockIDToken := "mock_google_" + googleEmail
+
+	// 1. Google sign-in for new user
+	authRes, err := service.SignInWithGoogle(ctx, mockIDToken)
+	if err != nil {
+		t.Fatalf("SignInWithGoogle failed: %v", err)
+	}
+
+	if authRes.User.Email != googleEmail {
+		t.Errorf("expected email %s, got %s", googleEmail, authRes.User.Email)
+	}
+	if authRes.AccessToken == "" || authRes.RefreshToken == "" {
+		t.Errorf("expected tokens to be returned")
+	}
+	if len(authRes.Fridges) == 0 {
+		t.Errorf("expected default fridge to be created")
+	}
+
+	// 2. Check welcome email with generated password
+	if len(mailer.sentWelcomeEmails) != 1 {
+		t.Fatalf("expected 1 welcome email sent, got %d", len(mailer.sentWelcomeEmails))
+	}
+
+	welcome := mailer.sentWelcomeEmails[0]
+	if welcome.toEmail != googleEmail {
+		t.Errorf("expected welcome email to %s, got %s", googleEmail, welcome.toEmail)
+	}
+	if len(welcome.password) < 8 {
+		t.Errorf("expected generated password >= 8 characters, got '%s'", welcome.password)
+	}
+
+	// 3. Verify user can also log in using the generated password!
+	loginRes, err := service.Login(ctx, googleEmail, welcome.password)
+	if err != nil {
+		t.Fatalf("failed to login with generated password from Google signup: %v", err)
+	}
+	if loginRes.User.Email != googleEmail {
+		t.Errorf("expected login email %s, got %s", googleEmail, loginRes.User.Email)
+	}
+
+	// 4. Cleanup
+	if len(authRes.Fridges) > 0 {
+		_ = queries.DeleteFridge(ctx, authRes.Fridges[0].ID)
+	}
+	_, _ = pool.Exec(ctx, "DELETE FROM users WHERE email = $1", googleEmail)
 }

@@ -34,6 +34,7 @@ type Config struct {
 	SMTPUser         string
 	SMTPPassword     string
 	SMTPFrom         string
+	GoogleClientID   string
 }
 
 func Load() *Config {
@@ -67,6 +68,7 @@ func Load() *Config {
 	smtpUser := getEnv("SMTP_USER", "efr1dg3@gmail.com")
 	smtpPass := getEnv("SMTP_PASS", "")
 	smtpFrom := getEnv("SMTP_FROM", "E-Fridge <efr1dg3@gmail.com>")
+	googleClientId := getEnv("GOOGLE_CLIENT_ID", "941333995278-pgiki8amquhfbac7f72ca3dvjspppceo.apps.googleusercontent.com")
 
 	if env == "production" && len(jwtSecret) < 32 {
 		log.Fatal("JWT_SECRET must be at least 32 characters in production")
@@ -96,6 +98,7 @@ func Load() *Config {
 		SMTPUser:         smtpUser,
 		SMTPPassword:     smtpPass,
 		SMTPFrom:         smtpFrom,
+		GoogleClientID:   googleClientId,
 	}
 }
 
