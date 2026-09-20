@@ -294,7 +294,12 @@ type UpdateProductQuantityAndUnitParams struct {
 }
 
 func (q *Queries) UpdateProductQuantityAndUnit(ctx context.Context, arg UpdateProductQuantityAndUnitParams) (Product, error) {
-	row := q.db.QueryRow(ctx, updateProductQuantityAndUnit, arg.ID, arg.FridgeID, arg.Quantity, arg.Unit)
+	row := q.db.QueryRow(ctx, updateProductQuantityAndUnit,
+		arg.ID,
+		arg.FridgeID,
+		arg.Quantity,
+		arg.Unit,
+	)
 	var i Product
 	err := row.Scan(
 		&i.ID,
@@ -315,4 +320,3 @@ func (q *Queries) UpdateProductQuantityAndUnit(ctx context.Context, arg UpdatePr
 	)
 	return i, err
 }
-

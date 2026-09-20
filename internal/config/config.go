@@ -26,6 +26,8 @@ type Config struct {
 	SmartModel       string
 	OpenRouterModel  string
 	OpenRouterModels []string
+	ResendAPIKey     string
+	ResendFromEmail  string
 }
 
 func Load() *Config {
@@ -50,6 +52,9 @@ func Load() *Config {
 	freeModel := getEnv("OPENROUTER_FREE_MODEL", getEnv("OPENROUTER_FAST_MODEL", "meta-llama/llama-3.3-70b-instruct:free"))
 	fallbackModel := getEnv("OPENROUTER_FALLBACK_MODEL", getEnv("OPENROUTER_CHEAP_MODEL", "deepseek/deepseek-chat"))
 
+	resendKey := getEnv("RESEND_API_KEY", "")
+	resendFrom := getEnv("RESEND_FROM_EMAIL", "E-Fridge <onboarding@resend.dev>")
+
 	if env == "production" && len(jwtSecret) < 32 {
 		log.Fatal("JWT_SECRET must be at least 32 characters in production")
 	}
@@ -70,6 +75,8 @@ func Load() *Config {
 		SmartModel:       fallbackModel,
 		OpenRouterModel:  freeModel,
 		OpenRouterModels: []string{freeModel, fallbackModel},
+		ResendAPIKey:     resendKey,
+		ResendFromEmail:  resendFrom,
 	}
 }
 

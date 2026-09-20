@@ -16,23 +16,31 @@ import (
 )
 
 var (
-	ErrInvalidCredentials  = errors.New("invalid email or password")
-	ErrEmailAlreadyExists  = errors.New("email is already registered")
-	ErrInvalidToken        = errors.New("invalid or expired refresh token")
-	ErrUserNotFound        = errors.New("user not found")
-	ErrInvalidInput        = errors.New("invalid input data")
+	ErrInvalidCredentials          = errors.New("invalid email or password")
+	ErrEmailAlreadyExists          = errors.New("email is already registered")
+	ErrInvalidToken                = errors.New("invalid or expired refresh token")
+	ErrUserNotFound                = errors.New("user not found")
+	ErrInvalidInput                = errors.New("invalid input data")
+	ErrInvalidVerificationCode     = errors.New("invalid or expired verification code")
+	ErrPendingRegistrationNotFound = errors.New("no pending registration found for this email")
 )
 
 type Service struct {
 	queries *db.Queries
 	cfg     *config.Config
+	mailer  Mailer
 }
 
 func NewService(queries *db.Queries, cfg *config.Config) *Service {
 	return &Service{
 		queries: queries,
 		cfg:     cfg,
+		mailer:  NewResendMailer(cfg.ResendAPIKey, cfg.ResendFromEmail, cfg.Environment),
 	}
+}
+
+func (s *Service) SetMailer(mailer Mailer) {
+	s.mailer = mailer
 }
 
 type UserDTO struct {
@@ -77,7 +85,14 @@ type TokenResult struct {
 	RefreshToken string `json:"refresh_token"`
 }
 
-func (s *Service) Register(ctx context.Context, email, name, password string) (*AuthResult, error) {
+type RegisterInitiateResult struct {
+	Status  string `json:"status"`
+	Email   string `json:"email"`
+	Message string `json:"message"`
+	DevCode string `json:"dev_code,omitempty"`
+}
+
+func (s *Service) Register(ctx context.Context, email, name, password string) (*RegisterInitiateResult, error) {
 	email = strings.TrimSpace(strings.ToLower(email))
 	name = strings.TrimSpace(name)
 
@@ -91,7 +106,7 @@ func (s *Service) Register(ctx context.Context, email, name, password string) (*
 		return nil, fmt.Errorf("%w: name is required", ErrInvalidInput)
 	}
 
-	// Check if already exists
+	// Check if already registered in users
 	_, err := s.queries.GetUserByEmail(ctx, email)
 	if err == nil {
 		return nil, ErrEmailAlreadyExists
@@ -104,15 +119,87 @@ func (s *Service) Register(ctx context.Context, email, name, password string) (*
 		return nil, fmt.Errorf("failed to hash password: %w", err)
 	}
 
+	code, err := GenerateVerificationCode()
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate verification code: %w", err)
+	}
+
+	expiresAt := time.Now().Add(15 * time.Minute)
+
+	_, err = s.queries.CreateOrUpdatePendingRegistration(ctx, db.CreateOrUpdatePendingRegistrationParams{
+		Email:            email,
+		Name:             name,
+		PasswordHash:     hashedPassword,
+		VerificationCode: code,
+		ExpiresAt:        expiresAt,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to save pending registration: %w", err)
+	}
+
+	if s.mailer != nil {
+		if err := s.mailer.SendVerificationEmail(ctx, email, name, code); err != nil {
+			return nil, fmt.Errorf("failed to send verification email: %w", err)
+		}
+	}
+
+	res := &RegisterInitiateResult{
+		Status:  "verification_required",
+		Email:   email,
+		Message: "Код підтвердження надіслано на вашу електронну пошту",
+	}
+	if s.cfg.Environment == "development" {
+		res.DevCode = code
+	}
+
+	return res, nil
+}
+
+func (s *Service) ConfirmRegistration(ctx context.Context, email, code string) (*AuthResult, error) {
+	email = strings.TrimSpace(strings.ToLower(email))
+	code = strings.TrimSpace(code)
+
+	if email == "" || code == "" {
+		return nil, fmt.Errorf("%w: email and verification code are required", ErrInvalidInput)
+	}
+
+	pending, err := s.queries.GetPendingRegistrationByEmail(ctx, email)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrPendingRegistrationNotFound
+		}
+		return nil, fmt.Errorf("failed to find pending registration: %w", err)
+	}
+
+	if time.Now().After(pending.ExpiresAt) {
+		return nil, ErrInvalidVerificationCode
+	}
+
+	if pending.VerificationCode != code {
+		return nil, ErrInvalidVerificationCode
+	}
+
+	// Verify user doesn't already exist
+	_, err = s.queries.GetUserByEmail(ctx, email)
+	if err == nil {
+		_ = s.queries.DeletePendingRegistration(ctx, email)
+		return nil, ErrEmailAlreadyExists
+	} else if !errors.Is(err, pgx.ErrNoRows) {
+		return nil, fmt.Errorf("failed to verify existing user: %w", err)
+	}
+
 	// Create user
 	createdUser, err := s.queries.CreateUser(ctx, db.CreateUserParams{
-		Email:        email,
-		Name:         name,
-		PasswordHash: hashedPassword,
+		Email:        pending.Email,
+		Name:         pending.Name,
+		PasswordHash: pending.PasswordHash,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create user: %w", err)
 	}
+
+	// Delete pending registration
+	_ = s.queries.DeletePendingRegistration(ctx, email)
 
 	// Create default fridge
 	defaultFridge, err := s.queries.CreateFridge(ctx, db.CreateFridgeParams{
@@ -170,6 +257,59 @@ func (s *Service) Register(ctx context.Context, email, name, password string) (*
 			},
 		},
 	}, nil
+}
+
+func (s *Service) ResendVerificationCode(ctx context.Context, email string) (*RegisterInitiateResult, error) {
+	email = strings.TrimSpace(strings.ToLower(email))
+	if email == "" || !strings.Contains(email, "@") {
+		return nil, fmt.Errorf("%w: valid email is required", ErrInvalidInput)
+	}
+
+	// Check if already registered
+	_, err := s.queries.GetUserByEmail(ctx, email)
+	if err == nil {
+		return nil, fmt.Errorf("%w: користувач вже зареєстрований, будь ласка, увійдіть", ErrInvalidInput)
+	}
+
+	pending, err := s.queries.GetPendingRegistrationByEmail(ctx, email)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrPendingRegistrationNotFound
+		}
+		return nil, fmt.Errorf("failed to lookup pending registration: %w", err)
+	}
+
+	code, err := GenerateVerificationCode()
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate verification code: %w", err)
+	}
+
+	expiresAt := time.Now().Add(15 * time.Minute)
+	err = s.queries.UpdatePendingRegistrationCode(ctx, db.UpdatePendingRegistrationCodeParams{
+		Email:            email,
+		VerificationCode: code,
+		ExpiresAt:        expiresAt,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to update verification code: %w", err)
+	}
+
+	if s.mailer != nil {
+		if err := s.mailer.SendVerificationEmail(ctx, email, pending.Name, code); err != nil {
+			return nil, fmt.Errorf("failed to send verification email: %w", err)
+		}
+	}
+
+	res := &RegisterInitiateResult{
+		Status:  "verification_required",
+		Email:   email,
+		Message: "Новий код підтвердження надіслано на вашу пошту",
+	}
+	if s.cfg.Environment == "development" {
+		res.DevCode = code
+	}
+
+	return res, nil
 }
 
 func (s *Service) Login(ctx context.Context, email, password string) (*AuthResult, error) {

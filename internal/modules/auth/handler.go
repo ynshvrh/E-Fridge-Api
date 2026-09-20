@@ -24,6 +24,15 @@ type RegisterRequest struct {
 	Password string `json:"password"`
 }
 
+type ConfirmRegistrationRequest struct {
+	Email string `json:"email"`
+	Code  string `json:"code"`
+}
+
+type ResendCodeRequest struct {
+	Email string `json:"email"`
+}
+
 type LoginRequest struct {
 	Email    string `json:"email"`
 	Password string `json:"password"`
@@ -38,6 +47,8 @@ func (h *Handler) Routes(jwtSecret string) chi.Router {
 
 	// Public routes
 	r.Post("/register", h.Register)
+	r.Post("/register/confirm", h.ConfirmRegistration)
+	r.Post("/register/resend", h.ResendCode)
 	r.Post("/login", h.Login)
 	r.Post("/refresh", h.Refresh)
 	r.Post("/logout", h.Logout)
@@ -105,11 +116,67 @@ func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 			response.Error(w, http.StatusBadRequest, err.Error(), "INVALID_INPUT")
 			return
 		}
-		response.Error(w, http.StatusInternalServerError, "Failed to register user", "INTERNAL_ERROR")
+		response.Error(w, http.StatusInternalServerError, err.Error(), "INTERNAL_ERROR")
+		return
+	}
+
+	response.JSON(w, http.StatusOK, result)
+}
+
+func (h *Handler) ConfirmRegistration(w http.ResponseWriter, r *http.Request) {
+	var req ConfirmRegistrationRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		response.Error(w, http.StatusBadRequest, "Invalid request body", "INVALID_REQUEST")
+		return
+	}
+
+	result, err := h.service.ConfirmRegistration(r.Context(), req.Email, req.Code)
+	if err != nil {
+		if errors.Is(err, ErrPendingRegistrationNotFound) {
+			response.Error(w, http.StatusNotFound, "Не знайдено активної заявки на реєстрацію. Будь ласка, почніть реєстрацію спочатку.", "NOT_FOUND")
+			return
+		}
+		if errors.Is(err, ErrInvalidVerificationCode) {
+			response.Error(w, http.StatusBadRequest, "Невірний або прострочений код підтвердження", "INVALID_CODE")
+			return
+		}
+		if errors.Is(err, ErrEmailAlreadyExists) {
+			response.Error(w, http.StatusConflict, "Користувач вже зареєстрований", "EMAIL_EXISTS")
+			return
+		}
+		if errors.Is(err, ErrInvalidInput) {
+			response.Error(w, http.StatusBadRequest, err.Error(), "INVALID_INPUT")
+			return
+		}
+		response.Error(w, http.StatusInternalServerError, "Помилка підтвердження реєстрації", "INTERNAL_ERROR")
 		return
 	}
 
 	response.JSON(w, http.StatusCreated, result)
+}
+
+func (h *Handler) ResendCode(w http.ResponseWriter, r *http.Request) {
+	var req ResendCodeRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		response.Error(w, http.StatusBadRequest, "Invalid request body", "INVALID_REQUEST")
+		return
+	}
+
+	result, err := h.service.ResendVerificationCode(r.Context(), req.Email)
+	if err != nil {
+		if errors.Is(err, ErrPendingRegistrationNotFound) {
+			response.Error(w, http.StatusNotFound, "Немає активної реєстрації для цієї пошти. Будь ласка, заповніть форму реєстрації.", "NOT_FOUND")
+			return
+		}
+		if errors.Is(err, ErrInvalidInput) {
+			response.Error(w, http.StatusBadRequest, err.Error(), "INVALID_INPUT")
+			return
+		}
+		response.Error(w, http.StatusInternalServerError, err.Error(), "INTERNAL_ERROR")
+		return
+	}
+
+	response.JSON(w, http.StatusOK, result)
 }
 
 func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {

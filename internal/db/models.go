@@ -70,6 +70,16 @@ type NutritionLog struct {
 	LoggedAt time.Time
 }
 
+type PendingRegistration struct {
+	ID               uuid.UUID
+	Email            string
+	Name             string
+	PasswordHash     string
+	VerificationCode string
+	ExpiresAt        time.Time
+	CreatedAt        time.Time
+}
+
 type Product struct {
 	ID         uuid.UUID
 	FridgeID   uuid.UUID

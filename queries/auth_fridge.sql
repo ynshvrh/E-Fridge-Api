@@ -103,3 +103,29 @@ WHERE id = $1;
 DELETE FROM fridge_members
 WHERE fridge_id = $1 AND user_id = $2;
 
+-- name: CreateOrUpdatePendingRegistration :one
+INSERT INTO pending_registrations (email, name, password_hash, verification_code, expires_at)
+VALUES ($1, $2, $3, $4, $5)
+ON CONFLICT (email) DO UPDATE SET
+    name = EXCLUDED.name,
+    password_hash = EXCLUDED.password_hash,
+    verification_code = EXCLUDED.verification_code,
+    expires_at = EXCLUDED.expires_at,
+    created_at = NOW()
+RETURNING id, email, name, password_hash, verification_code, expires_at, created_at;
+
+-- name: GetPendingRegistrationByEmail :one
+SELECT id, email, name, password_hash, verification_code, expires_at, created_at
+FROM pending_registrations
+WHERE email = $1;
+
+-- name: DeletePendingRegistration :exec
+DELETE FROM pending_registrations
+WHERE email = $1;
+
+-- name: UpdatePendingRegistrationCode :exec
+UPDATE pending_registrations
+SET verification_code = $2, expires_at = $3
+WHERE email = $1;
+
+
