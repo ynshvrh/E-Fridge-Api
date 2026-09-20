@@ -128,4 +128,9 @@ UPDATE pending_registrations
 SET verification_code = $2, expires_at = $3
 WHERE email = $1;
 
+-- name: CleanExpiredPendingRegistrations :exec
+DELETE FROM pending_registrations
+WHERE expires_at < NOW();
+
+
 

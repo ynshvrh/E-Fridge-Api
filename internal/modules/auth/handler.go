@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/ynshvrh/E-Fridge-Api/internal/middleware"
@@ -11,11 +12,19 @@ import (
 )
 
 type Handler struct {
-	service *Service
+	service         *Service
+	loginLimiter    *middleware.RateLimiter
+	registerLimiter *middleware.RateLimiter
+	resendLimiter   *middleware.RateLimiter
 }
 
 func NewHandler(service *Service) *Handler {
-	return &Handler{service: service}
+	return &Handler{
+		service:         service,
+		loginLimiter:    middleware.NewRateLimiter(5, 1*time.Minute, "Занадто багато спроб входу. Зачекайте 1 хвилину перед наступною спробою.", "TOO_MANY_REQUESTS"),
+		registerLimiter: middleware.NewRateLimiter(5, 5*time.Minute, "Занадто багато спроб реєстрації. Зачекайте кілька хвилин перед наступною спробою.", "TOO_MANY_REQUESTS"),
+		resendLimiter:   middleware.NewRateLimiter(3, 5*time.Minute, "Занадто багато запитів коду. Зачекайте кілька хвилин перед наступною спробою.", "TOO_MANY_REQUESTS"),
+	}
 }
 
 type RegisterRequest struct {
@@ -49,12 +58,12 @@ type RefreshRequest struct {
 func (h *Handler) Routes(jwtSecret string) chi.Router {
 	r := chi.NewRouter()
 
-	// Public routes
-	r.Post("/register", h.Register)
+	// Public routes with rate limiters
+	r.With(h.registerLimiter.Middleware()).Post("/register", h.Register)
 	r.Post("/register/confirm", h.ConfirmRegistration)
-	r.Post("/register/resend", h.ResendCode)
+	r.With(h.resendLimiter.Middleware()).Post("/register/resend", h.ResendCode)
 	r.Post("/google", h.GoogleAuth)
-	r.Post("/login", h.Login)
+	r.With(h.loginLimiter.Middleware()).Post("/login", h.Login)
 	r.Post("/refresh", h.Refresh)
 	r.Post("/logout", h.Logout)
 
@@ -117,6 +126,10 @@ func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 			response.Error(w, http.StatusConflict, "Email is already registered", "EMAIL_EXISTS")
 			return
 		}
+		if errors.Is(err, ErrRateLimited) {
+			response.Error(w, http.StatusTooManyRequests, err.Error(), "RATE_LIMITED")
+			return
+		}
 		if errors.Is(err, ErrInvalidInput) {
 			response.Error(w, http.StatusBadRequest, err.Error(), "INVALID_INPUT")
 			return
@@ -169,6 +182,10 @@ func (h *Handler) ResendCode(w http.ResponseWriter, r *http.Request) {
 
 	result, err := h.service.ResendVerificationCode(r.Context(), req.Email)
 	if err != nil {
+		if errors.Is(err, ErrRateLimited) {
+			response.Error(w, http.StatusTooManyRequests, err.Error(), "RATE_LIMITED")
+			return
+		}
 		if errors.Is(err, ErrPendingRegistrationNotFound) {
 			response.Error(w, http.StatusNotFound, "Немає активної реєстрації для цієї пошти. Будь ласка, заповніть форму реєстрації.", "NOT_FOUND")
 			return

@@ -3,6 +3,7 @@ package chef
 import (
 	"encoding/json"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/ynshvrh/E-Fridge-Api/internal/db"
@@ -12,10 +13,17 @@ import (
 
 type Handler struct {
 	service *Service
+	aiGuard *middleware.AIGuard
 }
 
-func NewHandler(service *Service) *Handler {
-	return &Handler{service: service}
+func NewHandler(service *Service, aiGuard ...*middleware.AIGuard) *Handler {
+	var guard *middleware.AIGuard
+	if len(aiGuard) > 0 && aiGuard[0] != nil {
+		guard = aiGuard[0]
+	} else {
+		guard = middleware.NewAIGuard(15*time.Second, 10, 5*time.Minute)
+	}
+	return &Handler{service: service, aiGuard: guard}
 }
 
 func (h *Handler) Routes(jwtSecret string, queries *db.Queries) chi.Router {
@@ -24,8 +32,8 @@ func (h *Handler) Routes(jwtSecret string, queries *db.Queries) chi.Router {
 	r.Use(middleware.Auth(jwtSecret))
 	r.Use(middleware.RequireFridge(queries))
 
-	r.Post("/chat", h.Chat)
-	r.Post("/generate", h.Generate)
+	r.With(h.aiGuard.Middleware()).Post("/chat", h.Chat)
+	r.With(h.aiGuard.Middleware()).Post("/generate", h.Generate)
 	r.Get("/history", h.GetHistory)
 	r.Delete("/history", h.ClearHistory)
 

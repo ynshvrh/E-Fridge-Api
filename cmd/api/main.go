@@ -17,6 +17,7 @@ import (
 	"github.com/ynshvrh/E-Fridge-Api/internal/config"
 	"github.com/ynshvrh/E-Fridge-Api/internal/database"
 	"github.com/ynshvrh/E-Fridge-Api/internal/db"
+	"github.com/ynshvrh/E-Fridge-Api/internal/middleware"
 	"github.com/ynshvrh/E-Fridge-Api/internal/modules/auth"
 	"github.com/ynshvrh/E-Fridge-Api/internal/modules/chef"
 	"github.com/ynshvrh/E-Fridge-Api/internal/modules/cooking"
@@ -67,8 +68,11 @@ func main() {
 	cookingService := cooking.NewService(queries, productsService, nutritionService)
 	cookingHandler := cooking.NewHandler(cookingService)
 
+	// Rate limiter & concurrency guard for AI endpoints (15s cooldown, max 10/5min)
+	aiGuard := middleware.NewAIGuard(15*time.Second, 10, 5*time.Minute)
+
 	chefService := chef.NewService(queries, cfg)
-	chefHandler := chef.NewHandler(chefService)
+	chefHandler := chef.NewHandler(chefService, aiGuard)
 
 	shoppingService := shopping.NewService(queries, productsService)
 	shoppingHandler := shopping.NewHandler(shoppingService)
@@ -77,7 +81,37 @@ func main() {
 	recipesHandler := recipes.NewHandler(recipesService)
 
 	plannerService := planner.NewService(queries, cfg)
-	plannerHandler := planner.NewHandler(plannerService)
+	plannerHandler := planner.NewHandler(plannerService, aiGuard)
+
+	// Periodic cleaner for expired pending registrations (every 1 hour)
+	cleanerStop := make(chan struct{})
+	go func() {
+		cleanCtx, cleanCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		if err := authService.CleanExpiredPendingRegistrations(cleanCtx); err != nil {
+			slog.Warn("Initial cleanup of expired pending registrations failed", "error", err)
+		} else {
+			slog.Info("Completed initial cleanup of expired pending registrations")
+		}
+		cleanCancel()
+
+		ticker := time.NewTicker(1 * time.Hour)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-cleanerStop:
+				return
+			case <-ticker.C:
+				cCtx, cCancel := context.WithTimeout(context.Background(), 10*time.Second)
+				if err := authService.CleanExpiredPendingRegistrations(cCtx); err != nil {
+					slog.Warn("Failed to clean expired pending registrations", "error", err)
+				} else {
+					slog.Info("Successfully cleaned expired pending registrations")
+				}
+				cCancel()
+			}
+		}
+	}()
 
 	// 5. Router
 	r := chi.NewRouter()
@@ -86,6 +120,7 @@ func main() {
 	r.Use(chimiddleware.RealIP)
 	r.Use(chimiddleware.Logger)
 	r.Use(chimiddleware.Recoverer)
+	r.Use(middleware.MaxBodySize(1 << 20)) // 1 MB request body limit
 
 	// CORS
 	r.Use(cors.Handler(cors.Options{
@@ -142,6 +177,8 @@ func main() {
 
 	<-shutdownChan
 	slog.Info("Shutting down server gracefully...")
+
+	close(cleanerStop)
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutdownCancel()

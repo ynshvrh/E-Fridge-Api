@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -204,10 +205,19 @@ func TestRegistrationFullFlowWithDB(t *testing.T) {
 		t.Errorf("expected error when confirming with wrong code")
 	}
 
-	// 3. Resend code
+	// 3. Resend code - immediate call should fail due to rate limit cooldown
+	_, err = service.ResendVerificationCode(ctx, testEmail)
+	if !errors.Is(err, ErrRateLimited) {
+		t.Fatalf("expected ErrRateLimited on immediate resend, got %v", err)
+	}
+
+	// Reset cooldown to simulate elapsed time
+	service.ResetResendCooldown(testEmail)
+
+	// Now resend should succeed
 	resendRes, err := service.ResendVerificationCode(ctx, testEmail)
 	if err != nil {
-		t.Fatalf("ResendVerificationCode failed: %v", err)
+		t.Fatalf("ResendVerificationCode failed after cooldown reset: %v", err)
 	}
 	if resendRes.Status != "verification_required" {
 		t.Errorf("expected status 'verification_required', got %s", resendRes.Status)
@@ -331,4 +341,69 @@ func TestSignInWithGoogleNewUser(t *testing.T) {
 		_ = queries.DeleteFridge(ctx, authRes.Fridges[0].ID)
 	}
 	_, _ = pool.Exec(ctx, "DELETE FROM users WHERE email = $1", googleEmail)
+}
+
+func TestCleanExpiredPendingRegistrationsWithDB(t *testing.T) {
+	ctx := context.Background()
+	dbURL := "postgres://postgres:postgrespassword@localhost:5432/e_fridge?sslmode=disable"
+	pool, err := pgx.Connect(ctx, dbURL)
+	if err != nil {
+		t.Skip("skipping DB integration test, cannot connect to PostgreSQL")
+		return
+	}
+	defer pool.Close(ctx)
+
+	queries := db.New(pool)
+	cfg := &config.Config{
+		JWTSecret:       "test-secret",
+		AccessTokenTTL:  15 * time.Minute,
+		RefreshTokenTTL: 7 * 24 * time.Hour,
+		Environment:     "test",
+	}
+	service := NewService(queries, cfg)
+
+	expiredEmail := "expired_" + uuid.New().String()[:8] + "@example.com"
+	activeEmail := "active_" + uuid.New().String()[:8] + "@example.com"
+
+	// Insert an expired registration (expired 1 hour ago)
+	_, err = pool.Exec(ctx, `
+		INSERT INTO pending_registrations (email, name, password_hash, verification_code, expires_at)
+		VALUES ($1, 'Expired User', 'dummyhash', '111111', NOW() - INTERVAL '1 hour')
+	`, expiredEmail)
+	if err != nil {
+		t.Fatalf("failed to insert expired pending registration: %v", err)
+	}
+
+	// Insert an active registration (expires in 48 hours)
+	_, err = pool.Exec(ctx, `
+		INSERT INTO pending_registrations (email, name, password_hash, verification_code, expires_at)
+		VALUES ($1, 'Active User', 'dummyhash', '222222', NOW() + INTERVAL '48 hours')
+	`, activeEmail)
+	if err != nil {
+		t.Fatalf("failed to insert active pending registration: %v", err)
+	}
+
+	// Run cleanup
+	err = service.CleanExpiredPendingRegistrations(ctx)
+	if err != nil {
+		t.Fatalf("CleanExpiredPendingRegistrations failed: %v", err)
+	}
+
+	// Verify expired was deleted
+	_, err = queries.GetPendingRegistrationByEmail(ctx, expiredEmail)
+	if err == nil {
+		t.Errorf("expected expired pending registration to be deleted")
+	}
+
+	// Verify active still exists
+	activePending, err := queries.GetPendingRegistrationByEmail(ctx, activeEmail)
+	if err != nil {
+		t.Errorf("expected active pending registration to remain, got err: %v", err)
+	} else if activePending.Email != activeEmail {
+		t.Errorf("expected email %s, got %s", activeEmail, activePending.Email)
+	}
+
+	// Cleanup
+	_ = queries.DeletePendingRegistration(ctx, activeEmail)
+	_ = queries.DeletePendingRegistration(ctx, expiredEmail)
 }

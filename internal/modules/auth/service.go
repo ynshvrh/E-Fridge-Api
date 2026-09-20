@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -25,19 +26,23 @@ var (
 	ErrInvalidInput                = errors.New("invalid input data")
 	ErrInvalidVerificationCode     = errors.New("invalid or expired verification code")
 	ErrPendingRegistrationNotFound = errors.New("no pending registration found for this email")
+	ErrRateLimited                 = errors.New("rate limit exceeded")
 )
 
 type Service struct {
-	queries *db.Queries
-	cfg     *config.Config
-	mailer  Mailer
+	queries         *db.Queries
+	cfg             *config.Config
+	mailer          Mailer
+	resendCooldowns map[string]time.Time
+	resendMu        sync.Mutex
 }
 
 func NewService(queries *db.Queries, cfg *config.Config) *Service {
 	return &Service{
-		queries: queries,
-		cfg:     cfg,
-		mailer:  NewMailer(cfg),
+		queries:         queries,
+		cfg:             cfg,
+		mailer:          NewMailer(cfg),
+		resendCooldowns: make(map[string]time.Time),
 	}
 }
 
@@ -116,6 +121,18 @@ func (s *Service) Register(ctx context.Context, email, name, password string) (*
 		return nil, fmt.Errorf("failed to check existing user: %w", err)
 	}
 
+	// Rate limit / cooldown per email (60s)
+	s.resendMu.Lock()
+	if lastSent, exists := s.resendCooldowns[email]; exists {
+		if elapsed := time.Since(lastSent); elapsed < 60*time.Second {
+			remaining := int((60*time.Second - elapsed).Seconds()) + 1
+			s.resendMu.Unlock()
+			return nil, fmt.Errorf("%w: код вже надіслано. Будь ласка, зачекайте %d с. перед повторною спробою", ErrRateLimited, remaining)
+		}
+	}
+	s.resendCooldowns[email] = time.Now()
+	s.resendMu.Unlock()
+
 	hashedPassword, err := crypto.HashPassword(password)
 	if err != nil {
 		return nil, fmt.Errorf("failed to hash password: %w", err)
@@ -126,7 +143,7 @@ func (s *Service) Register(ctx context.Context, email, name, password string) (*
 		return nil, fmt.Errorf("failed to generate verification code: %w", err)
 	}
 
-	expiresAt := time.Now().Add(15 * time.Minute)
+	expiresAt := time.Now().Add(48 * time.Hour)
 
 	_, err = s.queries.CreateOrUpdatePendingRegistration(ctx, db.CreateOrUpdatePendingRegistrationParams{
 		Email:            email,
@@ -202,6 +219,9 @@ func (s *Service) ConfirmRegistration(ctx context.Context, email, code string) (
 
 	// Delete pending registration
 	_ = s.queries.DeletePendingRegistration(ctx, email)
+	s.resendMu.Lock()
+	delete(s.resendCooldowns, email)
+	s.resendMu.Unlock()
 
 	// Create default fridge
 	defaultFridge, err := s.queries.CreateFridge(ctx, db.CreateFridgeParams{
@@ -281,12 +301,24 @@ func (s *Service) ResendVerificationCode(ctx context.Context, email string) (*Re
 		return nil, fmt.Errorf("failed to lookup pending registration: %w", err)
 	}
 
+	// Rate limit / cooldown per email (60s)
+	s.resendMu.Lock()
+	if lastSent, exists := s.resendCooldowns[email]; exists {
+		if elapsed := time.Since(lastSent); elapsed < 60*time.Second {
+			remaining := int((60*time.Second - elapsed).Seconds()) + 1
+			s.resendMu.Unlock()
+			return nil, fmt.Errorf("%w: зачекайте %d с. перед повторною відправкою коду", ErrRateLimited, remaining)
+		}
+	}
+	s.resendCooldowns[email] = time.Now()
+	s.resendMu.Unlock()
+
 	code, err := GenerateVerificationCode()
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate verification code: %w", err)
 	}
 
-	expiresAt := time.Now().Add(15 * time.Minute)
+	expiresAt := time.Now().Add(48 * time.Hour)
 	err = s.queries.UpdatePendingRegistrationCode(ctx, db.UpdatePendingRegistrationCodeParams{
 		Email:            email,
 		VerificationCode: code,
@@ -312,6 +344,16 @@ func (s *Service) ResendVerificationCode(ctx context.Context, email string) (*Re
 	}
 
 	return res, nil
+}
+
+func (s *Service) CleanExpiredPendingRegistrations(ctx context.Context) error {
+	return s.queries.CleanExpiredPendingRegistrations(ctx)
+}
+
+func (s *Service) ResetResendCooldown(email string) {
+	s.resendMu.Lock()
+	delete(s.resendCooldowns, email)
+	s.resendMu.Unlock()
 }
 
 func (s *Service) Login(ctx context.Context, email, password string) (*AuthResult, error) {

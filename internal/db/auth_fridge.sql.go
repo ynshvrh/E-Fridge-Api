@@ -37,6 +37,16 @@ func (q *Queries) AddFridgeMember(ctx context.Context, arg AddFridgeMemberParams
 	return i, err
 }
 
+const cleanExpiredPendingRegistrations = `-- name: CleanExpiredPendingRegistrations :exec
+DELETE FROM pending_registrations
+WHERE expires_at < NOW()
+`
+
+func (q *Queries) CleanExpiredPendingRegistrations(ctx context.Context) error {
+	_, err := q.db.Exec(ctx, cleanExpiredPendingRegistrations)
+	return err
+}
+
 const createFridge = `-- name: CreateFridge :one
 INSERT INTO fridges (name, owner_id)
 VALUES ($1, $2)
