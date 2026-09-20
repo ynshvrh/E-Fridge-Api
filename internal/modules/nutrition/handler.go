@@ -31,6 +31,7 @@ func (h *Handler) Routes(jwtSecret string) chi.Router {
 
 	r.Get("/daily", h.GetDaily)
 	r.Post("/log", h.LogMeal)
+	r.Put("/log/{id}", h.UpdateLog)
 	r.Delete("/log/{id}", h.DeleteLog)
 	r.Get("/goals", h.GetGoals)
 	r.Put("/goals", h.UpdateGoals)
@@ -78,6 +79,35 @@ func (h *Handler) LogMeal(w http.ResponseWriter, r *http.Request) {
 	response.JSON(w, http.StatusCreated, item)
 }
 
+func (h *Handler) UpdateLog(w http.ResponseWriter, r *http.Request) {
+	userID, ok := middleware.GetUserID(r.Context())
+	if !ok {
+		response.Error(w, http.StatusUnauthorized, "Unauthorized", "UNAUTHORIZED")
+		return
+	}
+
+	idStr := chi.URLParam(r, "id")
+	id, err := uuid.Parse(idStr)
+	if err != nil {
+		response.Error(w, http.StatusBadRequest, "Invalid log ID", "INVALID_ID")
+		return
+	}
+
+	var input UpdateLogInput
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		response.Error(w, http.StatusBadRequest, "Invalid request body", "INVALID_REQUEST")
+		return
+	}
+
+	updated, err := h.service.UpdateLog(r.Context(), id, userID, input)
+	if err != nil {
+		response.Error(w, http.StatusBadRequest, err.Error(), "UPDATE_LOG_FAILED")
+		return
+	}
+
+	response.JSON(w, http.StatusOK, updated)
+}
+
 func (h *Handler) DeleteLog(w http.ResponseWriter, r *http.Request) {
 	userID, ok := middleware.GetUserID(r.Context())
 	if !ok {
@@ -92,12 +122,13 @@ func (h *Handler) DeleteLog(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.service.DeleteLog(r.Context(), id, userID); err != nil {
-		response.Error(w, http.StatusInternalServerError, "Failed to delete log", "INTERNAL_ERROR")
+	result, err := h.service.DeleteLog(r.Context(), id, userID)
+	if err != nil {
+		response.Error(w, http.StatusInternalServerError, "Failed to delete log: "+err.Error(), "INTERNAL_ERROR")
 		return
 	}
 
-	response.JSON(w, http.StatusOK, map[string]string{"message": "Log deleted"})
+	response.JSON(w, http.StatusOK, result)
 }
 
 func (h *Handler) GetGoals(w http.ResponseWriter, r *http.Request) {

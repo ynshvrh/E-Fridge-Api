@@ -57,18 +57,20 @@ type MealPlan struct {
 }
 
 type NutritionLog struct {
-	ID       uuid.UUID
-	UserID   uuid.UUID
-	Date     pgtype.Date
-	MealType string
-	FoodName string
-	Quantity float64
-	Unit     string
-	Calories int32
-	Protein  float64
-	Fat      float64
-	Carbs    float64
-	LoggedAt time.Time
+	ID        uuid.UUID
+	UserID    uuid.UUID
+	Date      pgtype.Date
+	MealType  string
+	FoodName  string
+	Quantity  float64
+	Unit      string
+	Calories  int32
+	Protein   float64
+	Fat       float64
+	Carbs     float64
+	LoggedAt  time.Time
+	ProductID pgtype.UUID
+	FridgeID  pgtype.UUID
 }
 
 type PendingRegistration struct {

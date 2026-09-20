@@ -14,24 +14,26 @@ import (
 
 const createNutritionLog = `-- name: CreateNutritionLog :one
 INSERT INTO nutrition_logs (
-    user_id, date, meal_type, food_name, quantity, unit, calories, protein, fat, carbs
+    user_id, date, meal_type, food_name, quantity, unit, calories, protein, fat, carbs, product_id, fridge_id
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12
 )
-RETURNING id, user_id, date, meal_type, food_name, quantity, unit, calories, protein, fat, carbs, logged_at
+RETURNING id, user_id, date, meal_type, food_name, quantity, unit, calories, protein, fat, carbs, logged_at, product_id, fridge_id
 `
 
 type CreateNutritionLogParams struct {
-	UserID   uuid.UUID
-	Date     pgtype.Date
-	MealType string
-	FoodName string
-	Quantity float64
-	Unit     string
-	Calories int32
-	Protein  float64
-	Fat      float64
-	Carbs    float64
+	UserID    uuid.UUID
+	Date      pgtype.Date
+	MealType  string
+	FoodName  string
+	Quantity  float64
+	Unit      string
+	Calories  int32
+	Protein   float64
+	Fat       float64
+	Carbs     float64
+	ProductID pgtype.UUID
+	FridgeID  pgtype.UUID
 }
 
 func (q *Queries) CreateNutritionLog(ctx context.Context, arg CreateNutritionLogParams) (NutritionLog, error) {
@@ -46,6 +48,8 @@ func (q *Queries) CreateNutritionLog(ctx context.Context, arg CreateNutritionLog
 		arg.Protein,
 		arg.Fat,
 		arg.Carbs,
+		arg.ProductID,
+		arg.FridgeID,
 	)
 	var i NutritionLog
 	err := row.Scan(
@@ -61,6 +65,8 @@ func (q *Queries) CreateNutritionLog(ctx context.Context, arg CreateNutritionLog
 		&i.Fat,
 		&i.Carbs,
 		&i.LoggedAt,
+		&i.ProductID,
+		&i.FridgeID,
 	)
 	return i, err
 }
@@ -99,8 +105,40 @@ func (q *Queries) GetNutritionGoals(ctx context.Context, userID uuid.UUID) (User
 	return i, err
 }
 
+const getNutritionLogByID = `-- name: GetNutritionLogByID :one
+SELECT id, user_id, date, meal_type, food_name, quantity, unit, calories, protein, fat, carbs, logged_at, product_id, fridge_id FROM nutrition_logs
+WHERE id = $1 AND user_id = $2
+`
+
+type GetNutritionLogByIDParams struct {
+	ID     uuid.UUID
+	UserID uuid.UUID
+}
+
+func (q *Queries) GetNutritionLogByID(ctx context.Context, arg GetNutritionLogByIDParams) (NutritionLog, error) {
+	row := q.db.QueryRow(ctx, getNutritionLogByID, arg.ID, arg.UserID)
+	var i NutritionLog
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.Date,
+		&i.MealType,
+		&i.FoodName,
+		&i.Quantity,
+		&i.Unit,
+		&i.Calories,
+		&i.Protein,
+		&i.Fat,
+		&i.Carbs,
+		&i.LoggedAt,
+		&i.ProductID,
+		&i.FridgeID,
+	)
+	return i, err
+}
+
 const listNutritionLogsByDate = `-- name: ListNutritionLogsByDate :many
-SELECT id, user_id, date, meal_type, food_name, quantity, unit, calories, protein, fat, carbs, logged_at FROM nutrition_logs
+SELECT id, user_id, date, meal_type, food_name, quantity, unit, calories, protein, fat, carbs, logged_at, product_id, fridge_id FROM nutrition_logs
 WHERE user_id = $1 AND date = $2
 ORDER BY logged_at ASC
 `
@@ -132,6 +170,8 @@ func (q *Queries) ListNutritionLogsByDate(ctx context.Context, arg ListNutrition
 			&i.Fat,
 			&i.Carbs,
 			&i.LoggedAt,
+			&i.ProductID,
+			&i.FridgeID,
 		); err != nil {
 			return nil, err
 		}
@@ -141,6 +181,66 @@ func (q *Queries) ListNutritionLogsByDate(ctx context.Context, arg ListNutrition
 		return nil, err
 	}
 	return items, nil
+}
+
+const updateNutritionLog = `-- name: UpdateNutritionLog :one
+UPDATE nutrition_logs
+SET meal_type = $3,
+    food_name = $4,
+    quantity = $5,
+    unit = $6,
+    calories = $7,
+    protein = $8,
+    fat = $9,
+    carbs = $10
+WHERE id = $1 AND user_id = $2
+RETURNING id, user_id, date, meal_type, food_name, quantity, unit, calories, protein, fat, carbs, logged_at, product_id, fridge_id
+`
+
+type UpdateNutritionLogParams struct {
+	ID       uuid.UUID
+	UserID   uuid.UUID
+	MealType string
+	FoodName string
+	Quantity float64
+	Unit     string
+	Calories int32
+	Protein  float64
+	Fat      float64
+	Carbs    float64
+}
+
+func (q *Queries) UpdateNutritionLog(ctx context.Context, arg UpdateNutritionLogParams) (NutritionLog, error) {
+	row := q.db.QueryRow(ctx, updateNutritionLog,
+		arg.ID,
+		arg.UserID,
+		arg.MealType,
+		arg.FoodName,
+		arg.Quantity,
+		arg.Unit,
+		arg.Calories,
+		arg.Protein,
+		arg.Fat,
+		arg.Carbs,
+	)
+	var i NutritionLog
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.Date,
+		&i.MealType,
+		&i.FoodName,
+		&i.Quantity,
+		&i.Unit,
+		&i.Calories,
+		&i.Protein,
+		&i.Fat,
+		&i.Carbs,
+		&i.LoggedAt,
+		&i.ProductID,
+		&i.FridgeID,
+	)
+	return i, err
 }
 
 const upsertNutritionGoals = `-- name: UpsertNutritionGoals :one

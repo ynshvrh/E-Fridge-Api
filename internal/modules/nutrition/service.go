@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -21,30 +23,54 @@ func NewService(queries *db.Queries) *Service {
 }
 
 type LogMealInput struct {
-	Date     string  `json:"date"` // YYYY-MM-DD
-	MealType string  `json:"meal_type"` // breakfast, lunch, dinner, snack
-	FoodName string  `json:"food_name"`
-	Quantity float64 `json:"quantity"`
-	Unit     string  `json:"unit"`
-	Calories int32   `json:"calories"`
-	Protein  float64 `json:"protein"`
-	Fat      float64 `json:"fat"`
-	Carbs    float64 `json:"carbs"`
+	Date      string     `json:"date"` // YYYY-MM-DD
+	MealType  string     `json:"meal_type"` // breakfast, lunch, dinner, snack
+	FoodName  string     `json:"food_name"`
+	Quantity  float64    `json:"quantity"`
+	Unit      string     `json:"unit"`
+	Calories  int32      `json:"calories"`
+	Protein   float64    `json:"protein"`
+	Fat       float64    `json:"fat"`
+	Carbs     float64    `json:"carbs"`
+	ProductID *uuid.UUID `json:"product_id,omitempty"`
+	FridgeID  *uuid.UUID `json:"fridge_id,omitempty"`
+}
+
+type UpdateLogInput struct {
+	MealType string   `json:"meal_type"`
+	FoodName string   `json:"food_name"`
+	Quantity float64  `json:"quantity"`
+	Unit     string   `json:"unit"`
+	Calories *int32   `json:"calories,omitempty"`
+	Protein  *float64 `json:"protein,omitempty"`
+	Fat      *float64 `json:"fat,omitempty"`
+	Carbs    *float64 `json:"carbs,omitempty"`
 }
 
 type NutritionLogDTO struct {
-	ID       uuid.UUID `json:"id"`
-	UserID   uuid.UUID `json:"user_id"`
-	Date     string    `json:"date"`
-	MealType string    `json:"meal_type"`
-	FoodName string    `json:"food_name"`
-	Quantity float64   `json:"quantity"`
-	Unit     string    `json:"unit"`
-	Calories int32     `json:"calories"`
-	Protein  float64   `json:"protein"`
-	Fat      float64   `json:"fat"`
-	Carbs    float64   `json:"carbs"`
-	LoggedAt time.Time `json:"logged_at"`
+	ID        uuid.UUID  `json:"id"`
+	UserID    uuid.UUID  `json:"user_id"`
+	Date      string     `json:"date"`
+	MealType  string     `json:"meal_type"`
+	FoodName  string     `json:"food_name"`
+	Quantity  float64    `json:"quantity"`
+	Unit      string     `json:"unit"`
+	Calories  int32      `json:"calories"`
+	Protein   float64    `json:"protein"`
+	Fat       float64    `json:"fat"`
+	Carbs     float64    `json:"carbs"`
+	LoggedAt  time.Time  `json:"logged_at"`
+	ProductID *uuid.UUID `json:"product_id,omitempty"`
+	FridgeID  *uuid.UUID `json:"fridge_id,omitempty"`
+}
+
+type DeleteLogResultDTO struct {
+	Message          string  `json:"message"`
+	RestoredToFridge bool    `json:"restored_to_fridge"`
+	RestoredFridgeID string  `json:"restored_fridge_id,omitempty"`
+	FoodName         string  `json:"food_name,omitempty"`
+	Quantity         float64 `json:"quantity,omitempty"`
+	Unit             string  `json:"unit,omitempty"`
 }
 
 type DailySummaryDTO struct {
@@ -64,8 +90,34 @@ type GoalsDTO struct {
 	CarbsTarget   float64 `json:"carbs_target"`
 }
 
+func toLogDTO(r db.NutritionLog) *NutritionLogDTO {
+	dto := &NutritionLogDTO{
+		ID:       r.ID,
+		UserID:   r.UserID,
+		Date:     r.Date.Time.Format("2006-01-02"),
+		MealType: r.MealType,
+		FoodName: r.FoodName,
+		Quantity: r.Quantity,
+		Unit:     r.Unit,
+		Calories: r.Calories,
+		Protein:  r.Protein,
+		Fat:      r.Fat,
+		Carbs:    r.Carbs,
+		LoggedAt: r.LoggedAt,
+	}
+	if r.ProductID.Valid {
+		pid := uuid.UUID(r.ProductID.Bytes)
+		dto.ProductID = &pid
+	}
+	if r.FridgeID.Valid {
+		fid := uuid.UUID(r.FridgeID.Bytes)
+		dto.FridgeID = &fid
+	}
+	return dto
+}
+
 func (s *Service) LogMeal(ctx context.Context, userID uuid.UUID, input LogMealInput) (*NutritionLogDTO, error) {
-	if input.FoodName == "" {
+	if strings.TrimSpace(input.FoodName) == "" {
 		return nil, errors.New("food name is required")
 	}
 
@@ -74,12 +126,12 @@ func (s *Service) LogMeal(ctx context.Context, userID uuid.UUID, input LogMealIn
 		date = time.Now()
 	}
 
-	mealType := input.MealType
+	mealType := strings.TrimSpace(input.MealType)
 	if mealType == "" {
 		mealType = "snack"
 	}
 
-	unit := input.Unit
+	unit := strings.TrimSpace(input.Unit)
 	if unit == "" {
 		unit = "порц"
 	}
@@ -98,36 +150,115 @@ func (s *Service) LogMeal(ctx context.Context, userID uuid.UUID, input LogMealIn
 		p, f, c = calcP, calcF, calcC
 	}
 
+	var prodID, fridgeID pgtype.UUID
+	if input.ProductID != nil {
+		prodID = pgtype.UUID{Bytes: *input.ProductID, Valid: true}
+	}
+	if input.FridgeID != nil {
+		fridgeID = pgtype.UUID{Bytes: *input.FridgeID, Valid: true}
+	}
+
 	logEntry, err := s.queries.CreateNutritionLog(ctx, db.CreateNutritionLogParams{
-		UserID:   userID,
-		Date:     pgtype.Date{Time: date, Valid: true},
-		MealType: mealType,
-		FoodName: input.FoodName,
-		Quantity: qty,
-		Unit:     unit,
-		Calories: calories,
-		Protein:  p,
-		Fat:      f,
-		Carbs:    c,
+		UserID:    userID,
+		Date:      pgtype.Date{Time: date, Valid: true},
+		MealType:  mealType,
+		FoodName:  input.FoodName,
+		Quantity:  qty,
+		Unit:      unit,
+		Calories:  calories,
+		Protein:   p,
+		Fat:       f,
+		Carbs:     c,
+		ProductID: prodID,
+		FridgeID:  fridgeID,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to save nutrition log: %w", err)
 	}
 
-	return &NutritionLogDTO{
-		ID:       logEntry.ID,
-		UserID:   logEntry.UserID,
-		Date:     logEntry.Date.Time.Format("2006-01-02"),
-		MealType: logEntry.MealType,
-		FoodName: logEntry.FoodName,
-		Quantity: logEntry.Quantity,
-		Unit:     logEntry.Unit,
-		Calories: logEntry.Calories,
-		Protein:  logEntry.Protein,
-		Fat:      logEntry.Fat,
-		Carbs:    logEntry.Carbs,
-		LoggedAt: logEntry.LoggedAt,
-	}, nil
+	return toLogDTO(logEntry), nil
+}
+
+func (s *Service) UpdateLog(ctx context.Context, id, userID uuid.UUID, input UpdateLogInput) (*NutritionLogDTO, error) {
+	log, err := s.queries.GetNutritionLogByID(ctx, db.GetNutritionLogByIDParams{
+		ID:     id,
+		UserID: userID,
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, errors.New("nutrition log not found")
+		}
+		return nil, err
+	}
+
+	mealType := strings.TrimSpace(input.MealType)
+	if mealType == "" {
+		mealType = log.MealType
+	}
+	foodName := strings.TrimSpace(input.FoodName)
+	if foodName == "" {
+		foodName = log.FoodName
+	}
+	unit := strings.TrimSpace(input.Unit)
+	if unit == "" {
+		unit = log.Unit
+	}
+	quantity := input.Quantity
+	if quantity <= 0 {
+		quantity = log.Quantity
+	}
+
+	// Recalculate or keep calories/macros
+	calories := log.Calories
+	protein := log.Protein
+	fat := log.Fat
+	carbs := log.Carbs
+
+	if input.Calories != nil {
+		calories = *input.Calories
+	} else if quantity != log.Quantity && log.Quantity > 0 {
+		ratio := quantity / log.Quantity
+		calories = int32(float64(log.Calories) * ratio)
+	}
+
+	if input.Protein != nil {
+		protein = *input.Protein
+	} else if quantity != log.Quantity && log.Quantity > 0 {
+		ratio := quantity / log.Quantity
+		protein = round2(log.Protein * ratio)
+	}
+
+	if input.Fat != nil {
+		fat = *input.Fat
+	} else if quantity != log.Quantity && log.Quantity > 0 {
+		ratio := quantity / log.Quantity
+		fat = round2(log.Fat * ratio)
+	}
+
+	if input.Carbs != nil {
+		carbs = *input.Carbs
+	} else if quantity != log.Quantity && log.Quantity > 0 {
+		ratio := quantity / log.Quantity
+		carbs = round2(log.Carbs * ratio)
+	}
+
+	updated, err := s.queries.UpdateNutritionLog(ctx, db.UpdateNutritionLogParams{
+		ID:       id,
+		UserID:   userID,
+		MealType: mealType,
+		FoodName: foodName,
+		Quantity: quantity,
+		Unit:     unit,
+		Calories: calories,
+		Protein:  protein,
+		Fat:      fat,
+		Carbs:    carbs,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to update nutrition log: %w", err)
+	}
+
+	return toLogDTO(updated), nil
 }
 
 func (s *Service) GetDailySummary(ctx context.Context, userID uuid.UUID, dateStr string) (*DailySummaryDTO, error) {
@@ -162,20 +293,8 @@ func (s *Service) GetDailySummary(ctx context.Context, userID uuid.UUID, dateStr
 		summary.TotalFat += r.Fat
 		summary.TotalCarbs += r.Carbs
 
-		summary.Logs = append(summary.Logs, NutritionLogDTO{
-			ID:       r.ID,
-			UserID:   r.UserID,
-			Date:     r.Date.Time.Format("2006-01-02"),
-			MealType: r.MealType,
-			FoodName: r.FoodName,
-			Quantity: r.Quantity,
-			Unit:     r.Unit,
-			Calories: r.Calories,
-			Protein:  r.Protein,
-			Fat:      r.Fat,
-			Carbs:    r.Carbs,
-			LoggedAt: r.LoggedAt,
-		})
+		dto := toLogDTO(r)
+		summary.Logs = append(summary.Logs, *dto)
 	}
 
 	summary.TotalProtein = round2(summary.TotalProtein)
@@ -185,18 +304,96 @@ func (s *Service) GetDailySummary(ctx context.Context, userID uuid.UUID, dateStr
 	return summary, nil
 }
 
-func (s *Service) DeleteLog(ctx context.Context, id, userID uuid.UUID) error {
-	return s.queries.DeleteNutritionLog(ctx, db.DeleteNutritionLogParams{
+func (s *Service) DeleteLog(ctx context.Context, id, userID uuid.UUID) (*DeleteLogResultDTO, error) {
+	log, err := s.queries.GetNutritionLogByID(ctx, db.GetNutritionLogByIDParams{
 		ID:     id,
 		UserID: userID,
 	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, errors.New("nutrition log not found")
+		}
+		return nil, err
+	}
+
+	var restoredToFridge bool
+	var restoredFridgeID string
+
+	// If logged from a fridge, return consumed stock back into the fridge!
+	if log.FridgeID.Valid {
+		fridgeID := log.FridgeID.Bytes
+		restoredFridgeID = uuid.UUID(fridgeID).String()
+
+		// 1. Try to restore to existing product if product still exists
+		if log.ProductID.Valid {
+			prodID := log.ProductID.Bytes
+			prod, err := s.queries.GetProductByID(ctx, db.GetProductByIDParams{
+				ID:       prodID,
+				FridgeID: fridgeID,
+			})
+			if err == nil {
+				// Product exists! Add back consumed quantity
+				newQty := math.Round((prod.Quantity+log.Quantity)*1000) / 1000
+				_, _ = s.queries.UpdateProductQuantity(ctx, db.UpdateProductQuantityParams{
+					ID:       prodID,
+					FridgeID: fridgeID,
+					Quantity: newQty,
+				})
+				restoredToFridge = true
+			}
+		}
+
+		// 2. If product was completely eaten (removed from fridge) or ID was null, recreate it!
+		if !restoredToFridge {
+			expiry := pgtype.Date{Time: time.Now().AddDate(0, 0, 4), Valid: true}
+			_, err := s.queries.CreateProduct(ctx, db.CreateProductParams{
+				FridgeID:   fridgeID,
+				Name:       log.FoodName,
+				Category:   "other",
+				Quantity:   log.Quantity,
+				Unit:       log.Unit,
+				ExpiryDate: expiry,
+				Calories:   log.Calories,
+				Protein:    log.Protein,
+				Fat:        log.Fat,
+				Carbs:      log.Carbs,
+				Notes:      "Повернено зі щоденника харчування",
+				CreatedBy:  userID,
+			})
+			if err == nil {
+				restoredToFridge = true
+			}
+		}
+	}
+
+	// Delete log entry
+	err = s.queries.DeleteNutritionLog(ctx, db.DeleteNutritionLogParams{
+		ID:     id,
+		UserID: userID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to delete nutrition log: %w", err)
+	}
+
+	msg := "Запис видалено"
+	if restoredToFridge {
+		msg = fmt.Sprintf("Запис видалено. Продукт \"%s\" (%v %s) повернуто в холодильник!", log.FoodName, log.Quantity, log.Unit)
+	}
+
+	return &DeleteLogResultDTO{
+		Message:          msg,
+		RestoredToFridge: restoredToFridge,
+		RestoredFridgeID: restoredFridgeID,
+		FoodName:         log.FoodName,
+		Quantity:         log.Quantity,
+		Unit:             log.Unit,
+	}, nil
 }
 
 func (s *Service) GetGoals(ctx context.Context, userID uuid.UUID) (*GoalsDTO, error) {
 	g, err := s.queries.GetNutritionGoals(ctx, userID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			// default goals
 			return &GoalsDTO{
 				CalorieTarget: 2000,
 				ProteinTarget: 100,

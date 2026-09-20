@@ -216,12 +216,14 @@ func (s *Service) CookRecipe(ctx context.Context, fridgeID, userID uuid.UUID, in
 			Date:     time.Now().Format("2006-01-02"),
 			MealType: input.MealType,
 			FoodName: input.RecipeTitle,
-			Quantity: 1,
-			Unit:     "порц",
-			Calories: perServingCals,
-			Protein:  perServingProtein,
-			Fat:      perServingFat,
-			Carbs:    perServingCarbs,
+			Quantity:  1,
+			Unit:      "порц",
+			Calories:  perServingCals,
+			Protein:   perServingProtein,
+			Fat:       perServingFat,
+			Carbs:     perServingCarbs,
+			ProductID: &createdMeal.ID,
+			FridgeID:  &fridgeID,
 		})
 		if err == nil {
 			result.LoggedMeal = logged
@@ -304,12 +306,14 @@ func (s *Service) ConsumeMeal(ctx context.Context, fridgeID, userID uuid.UUID, i
 		Date:     time.Now().Format("2006-01-02"),
 		MealType: mealType,
 		FoodName: prod.Name,
-		Quantity: amount,
-		Unit:     unit,
-		Calories: cals,
-		Protein:  p,
-		Fat:      f,
-		Carbs:    c,
+		Quantity:  amount,
+		Unit:      unit,
+		Calories:  cals,
+		Protein:   p,
+		Fat:       f,
+		Carbs:     c,
+		ProductID: &prod.ID,
+		FridgeID:  &fridgeID,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("consumed product but failed to log nutrition: %w", err)

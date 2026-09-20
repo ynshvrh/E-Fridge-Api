@@ -1,9 +1,26 @@
 -- name: CreateNutritionLog :one
 INSERT INTO nutrition_logs (
-    user_id, date, meal_type, food_name, quantity, unit, calories, protein, fat, carbs
+    user_id, date, meal_type, food_name, quantity, unit, calories, protein, fat, carbs, product_id, fridge_id
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12
 )
+RETURNING *;
+
+-- name: GetNutritionLogByID :one
+SELECT * FROM nutrition_logs
+WHERE id = $1 AND user_id = $2;
+
+-- name: UpdateNutritionLog :one
+UPDATE nutrition_logs
+SET meal_type = $3,
+    food_name = $4,
+    quantity = $5,
+    unit = $6,
+    calories = $7,
+    protein = $8,
+    fat = $9,
+    carbs = $10
+WHERE id = $1 AND user_id = $2
 RETURNING *;
 
 -- name: ListNutritionLogsByDate :many
