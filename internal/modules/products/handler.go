@@ -22,7 +22,9 @@ func NewHandler(service *Service) *Handler {
 
 type ConsumeRequest struct {
 	Amount float64 `json:"amount"`
+	Unit   string  `json:"unit"`
 }
+
 
 func (h *Handler) Routes(jwtSecret string, queries *db.Queries) chi.Router {
 	r := chi.NewRouter()
@@ -168,7 +170,7 @@ func (h *Handler) Consume(w http.ResponseWriter, r *http.Request) {
 	var req ConsumeRequest
 	_ = json.NewDecoder(r.Body).Decode(&req)
 
-	product, err := h.service.ConsumeProduct(r.Context(), fridgeID, id, req.Amount)
+	product, err := h.service.ConsumeProductWithUnit(r.Context(), fridgeID, id, req.Amount, req.Unit)
 	if err != nil {
 		if errors.Is(err, ErrProductNotFound) {
 			response.Error(w, http.StatusNotFound, "Product not found", "NOT_FOUND")

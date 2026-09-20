@@ -13,7 +13,10 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/ynshvrh/E-Fridge-Api/internal/modules/nutrition"
 )
+
 
 var (
 	ErrBarcodeNotFound  = errors.New("barcode not found in OpenFoodFacts database")
@@ -227,13 +230,15 @@ func (s *Service) LookupBarcode(ctx context.Context, barcode string) (*BarcodePr
 		Status  int `json:"status"`
 		Product *struct {
 			ProductNameUk  string   `json:"product_name_uk"`
-			ProductName    string   `json:"product_name"`
-			ProductNameEn  string   `json:"product_name_en"`
-			Brands         string   `json:"brands"`
-			CategoriesTags []string `json:"categories_tags"`
-			QuantityStr    string   `json:"quantity"`
-			ImageFrontURL  string   `json:"image_front_url"`
-			Nutriments     struct {
+			ProductName         string   `json:"product_name"`
+			ProductNameEn       string   `json:"product_name_en"`
+			Brands              string   `json:"brands"`
+			CategoriesTags      []string `json:"categories_tags"`
+			QuantityStr         string   `json:"quantity"`
+			ProductQuantity     *float64 `json:"product_quantity"`
+			ProductQuantityUnit string   `json:"product_quantity_unit"`
+			ImageFrontURL       string   `json:"image_front_url"`
+			Nutriments          struct {
 				EnergyKcal100g *float64 `json:"energy-kcal_100g"`
 				EnergyKcal     *float64 `json:"energy-kcal"`
 				Proteins100g   *float64 `json:"proteins_100g"`
@@ -267,12 +272,13 @@ func (s *Service) LookupBarcode(ctx context.Context, barcode string) (*BarcodePr
 	}
 
 	category := mapCategoriesToCategory(p.CategoriesTags, name)
-	qty, unit := parseQuantityAndUnit(p.QuantityStr)
+	qty, unit := parseQuantityAndUnitWithFallback(p.ProductQuantity, p.ProductQuantityUnit, p.QuantityStr, name)
 
 	var calories int32
 	if p.Nutriments.EnergyKcal100g != nil {
 		calories = int32(*p.Nutriments.EnergyKcal100g)
 	} else if p.Nutriments.EnergyKcal != nil {
+
 		calories = int32(*p.Nutriments.EnergyKcal)
 	}
 
@@ -346,7 +352,7 @@ func containsAny(s string, keywords ...string) bool {
 	return false
 }
 
-var qtyRegex = regexp.MustCompile(`(?i)^([\d.,]+)\s*(kg|g|l|ml|cl|шт|pcs|уп)?$`)
+var qtyRegex = regexp.MustCompile(`(?i)([\d]+(?:[.,]\d+)?)\s*(kg|g|l|ml|cl|кг|г|л|мл|шт|pcs|уп|грам|грамм|літр)`)
 
 func parseQuantityAndUnit(raw string) (float64, string) {
 	raw = strings.TrimSpace(raw)
@@ -369,13 +375,13 @@ func parseQuantityAndUnit(raw string) (float64, string) {
 	if len(matches) >= 3 && matches[2] != "" {
 		u := strings.ToLower(matches[2])
 		switch u {
-		case "kg":
+		case "kg", "кг":
 			unit = "кг"
-		case "g":
+		case "g", "г", "грам", "грамм":
 			unit = "г"
-		case "l":
+		case "l", "л", "літр":
 			unit = "л"
-		case "ml":
+		case "ml", "мл":
 			unit = "мл"
 		case "cl":
 			val = val * 10
@@ -387,6 +393,45 @@ func parseQuantityAndUnit(raw string) (float64, string) {
 
 	return val, unit
 }
+
+func parseQuantityAndUnitWithFallback(prodQty *float64, prodUnit, rawStr, name string) (float64, string) {
+	// 1. Direct numeric quantity from OpenFoodFacts
+	if prodQty != nil && *prodQty > 0 {
+		q := *prodQty
+		u := strings.ToLower(strings.TrimSpace(prodUnit))
+		switch u {
+		case "kg", "кг":
+			return q, "кг"
+		case "g", "г", "gr":
+			return q, "г"
+		case "l", "л":
+			return q, "л"
+		case "ml", "мл":
+			return q, "мл"
+		case "cl":
+			return q * 10, "мл"
+		default:
+			if q >= 15 {
+				return q, "г"
+			}
+			return q, "шт"
+		}
+	}
+
+	// 2. Parse from quantity string
+	q, u := parseQuantityAndUnit(rawStr)
+	if u != "шт" || q > 1 {
+		return q, u
+	}
+
+	// 3. Fallback to package size from product name or database
+	if g := nutrition.GetPackageOrPieceGrams(name); g > 0 && g != 250.0 {
+		return g, "г"
+	}
+
+	return q, u
+}
+
 
 // heuristicNutritionEstimate returns deterministic baseline nutrition for common food items
 func (s *Service) heuristicNutritionEstimate(name, unit string, qty float64) *NutritionEstimate {

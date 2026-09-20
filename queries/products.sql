@@ -38,6 +38,15 @@ SET quantity = $3,
 WHERE id = $1 AND fridge_id = $2
 RETURNING *;
 
+-- name: UpdateProductQuantityAndUnit :one
+UPDATE products
+SET quantity = $3,
+    unit = $4,
+    updated_at = NOW()
+WHERE id = $1 AND fridge_id = $2
+RETURNING *;
+
+
 -- name: DeleteProduct :exec
 DELETE FROM products
 WHERE id = $1 AND fridge_id = $2;

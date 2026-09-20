@@ -276,3 +276,43 @@ func (q *Queries) UpdateProductQuantity(ctx context.Context, arg UpdateProductQu
 	)
 	return i, err
 }
+
+const updateProductQuantityAndUnit = `-- name: UpdateProductQuantityAndUnit :one
+UPDATE products
+SET quantity = $3,
+    unit = $4,
+    updated_at = NOW()
+WHERE id = $1 AND fridge_id = $2
+RETURNING id, fridge_id, name, category, quantity, unit, expiry_date, calories, protein, fat, carbs, notes, created_by, created_at, updated_at
+`
+
+type UpdateProductQuantityAndUnitParams struct {
+	ID       uuid.UUID
+	FridgeID uuid.UUID
+	Quantity float64
+	Unit     string
+}
+
+func (q *Queries) UpdateProductQuantityAndUnit(ctx context.Context, arg UpdateProductQuantityAndUnitParams) (Product, error) {
+	row := q.db.QueryRow(ctx, updateProductQuantityAndUnit, arg.ID, arg.FridgeID, arg.Quantity, arg.Unit)
+	var i Product
+	err := row.Scan(
+		&i.ID,
+		&i.FridgeID,
+		&i.Name,
+		&i.Category,
+		&i.Quantity,
+		&i.Unit,
+		&i.ExpiryDate,
+		&i.Calories,
+		&i.Protein,
+		&i.Fat,
+		&i.Carbs,
+		&i.Notes,
+		&i.CreatedBy,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+

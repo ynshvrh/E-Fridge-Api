@@ -255,17 +255,12 @@ func (s *Service) ConsumeMeal(ctx context.Context, fridgeID, userID uuid.UUID, i
 		mealType = "snack"
 	}
 
-	// 1. Calculate quantity to deduct from product in fridge
-	deductQty := convertUnitsWithFood(amount, unit, prod.Unit, prod.Name)
-	if deductQty <= 0 {
-		deductQty = amount
-	}
-
-	// 2. Consume from fridge
-	updatedProd, err := s.productsService.ConsumeProduct(ctx, fridgeID, input.ProductID, deductQty)
+	// 1. Consume from fridge with unit
+	updatedProd, err := s.productsService.ConsumeProductWithUnit(ctx, fridgeID, input.ProductID, amount, unit)
 	if err != nil {
 		return nil, err
 	}
+
 
 	// 3. Calculate accurate nutrition for the logged meal
 	var cals int32
@@ -290,19 +285,13 @@ func (s *Service) ConsumeMeal(ctx context.Context, fridgeID, userID uuid.UUID, i
 		p = round2(prod.Protein * portionsConsumed)
 		f = round2(prod.Fat * portionsConsumed)
 		c = round2(prod.Carbs * portionsConsumed)
-	} else if prodUnit == "шт" || prodUnit == "pcs" {
-		// For piece-based products, product nutrition is stored per 1 piece
-		piecesConsumed := convertUnitsWithFood(amount, unit, "шт", prod.Name)
-		if piecesConsumed <= 0 {
-			piecesConsumed = 1.0
-		}
-		cals = int32(float64(prod.Calories) * piecesConsumed)
-		p = round2(prod.Protein * piecesConsumed)
-		f = round2(prod.Fat * piecesConsumed)
-		c = round2(prod.Carbs * piecesConsumed)
 	} else {
-		// For weight/volume products (kg, g, l, ml), product nutrition is standard per 100g/100ml
+		// For standard groceries, nutrition is stored per 100g/100ml.
+		// Convert consumed quantity to grams/ml:
 		gramsConsumed := convertUnitsWithFood(amount, unit, "г", prod.Name)
+		if gramsConsumed <= 0 {
+			gramsConsumed = amount
+		}
 		factor := gramsConsumed / 100.0
 		cals = int32(float64(prod.Calories) * factor)
 		p = round2(prod.Protein * factor)
@@ -377,8 +366,8 @@ func convertUnitsWithFood(qty float64, fromUnit, toUnit, foodName string) float6
 		return (qty * 1000.0) / 300.0
 	}
 
-	// Piece conversions
-	pieceGrams := nutrition.GetDefaultPieceGrams(foodName)
+	// Piece and package conversions
+	pieceGrams := nutrition.GetPackageOrPieceGrams(foodName)
 	if pieceGrams <= 0 {
 		pieceGrams = 100.0
 	}

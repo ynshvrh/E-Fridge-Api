@@ -1,8 +1,11 @@
 package nutrition
 
 import (
+	"regexp"
+	"strconv"
 	"strings"
 )
+
 
 type FoodNutrients struct {
 	Calories          int     // per 100g / 100ml
@@ -163,3 +166,86 @@ func GetDefaultPieceGrams(name string) float64 {
 	}
 	return 100.0
 }
+
+// FoodPackageGrams contains reference package/container weights in grams for grocery items in Ukraine/Europe.
+var FoodPackageGrams = map[string]float64{
+	"nutella":           350,
+	"нутелла":           350,
+	"майонез":           380,
+	"кетчуп":            300,
+	"соус":              250,
+	"моцарела":          150,
+	"моцарелла":         150,
+	"масло":             200,
+	"вершкове масло":    200,
+	"сметана":           350,
+	"сир":               200,
+	"твердий сир":       200,
+	"пармезан":          150,
+	"фета":              200,
+	"сулугуні":          250,
+	"сир кисломолочний": 300,
+	"творог":            300,
+	"йогурт":            300,
+	"молоко":            1000,
+	"кефір":             900,
+	"сосиски":           350,
+	"сардельки":         400,
+	"ковбаса":           400,
+	"хліб":              450,
+	"батон":             400,
+	"лаваш":             200,
+	"вівсянка":          500,
+	"гречка":            800,
+	"рис":               800,
+	"макарони":          500,
+}
+
+var nameGramsRegex = regexp.MustCompile(`(?i)(?:^|[^\d])(\d+(?:[.,]\d+)?)\s*(?:г|g|мл|ml|грам|грамм)`)
+
+// ExtractGramsFromName attempts to parse weight in grams or volume in ml directly from product title (e.g. "Майонез 380г").
+func ExtractGramsFromName(name string) float64 {
+	m := nameGramsRegex.FindStringSubmatch(name)
+	if len(m) >= 2 {
+		valStr := strings.Replace(m[1], ",", ".", 1)
+		if val, err := strconv.ParseFloat(valStr, 64); err == nil && val > 0 {
+			return val
+		}
+	}
+	return 0
+}
+
+// GetPackageOrPieceGrams returns realistic package/piece weight in grams for given food name.
+func GetPackageOrPieceGrams(name string) float64 {
+	// 1. Check if name already has weight (e.g. "Майонез 380г")
+	if g := ExtractGramsFromName(name); g > 0 {
+		return g
+	}
+
+	cleanName := strings.ToLower(strings.TrimSpace(name))
+	if cleanName == "" {
+		return 250.0
+	}
+
+	// 2. Exact match in FoodPackageGrams
+	if g, ok := FoodPackageGrams[cleanName]; ok && g > 0 {
+		return g
+	}
+
+	// 3. Substring match in FoodPackageGrams
+	for k, v := range FoodPackageGrams {
+		if strings.Contains(cleanName, k) || strings.Contains(k, cleanName) {
+			if v > 0 {
+				return v
+			}
+		}
+	}
+
+	// 4. Match in FoodDatabase DefaultPieceGrams
+	if g := GetDefaultPieceGrams(cleanName); g > 0 && g != 100.0 {
+		return g
+	}
+
+	return 250.0
+}
+

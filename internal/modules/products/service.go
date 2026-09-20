@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"strings"
 	"time"
@@ -13,7 +14,9 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/ynshvrh/E-Fridge-Api/internal/config"
 	"github.com/ynshvrh/E-Fridge-Api/internal/db"
+	"github.com/ynshvrh/E-Fridge-Api/internal/modules/nutrition"
 )
+
 
 var (
 	ErrProductNotFound = errors.New("product not found")
@@ -253,6 +256,10 @@ func (s *Service) UpdateProduct(ctx context.Context, fridgeID, id uuid.UUID, inp
 }
 
 func (s *Service) ConsumeProduct(ctx context.Context, fridgeID, id uuid.UUID, amount float64) (*ProductDTO, error) {
+	return s.ConsumeProductWithUnit(ctx, fridgeID, id, amount, "")
+}
+
+func (s *Service) ConsumeProductWithUnit(ctx context.Context, fridgeID, id uuid.UUID, amount float64, userUnit string) (*ProductDTO, error) {
 	if amount <= 0 {
 		amount = 1.0
 	}
@@ -268,24 +275,141 @@ func (s *Service) ConsumeProduct(ctx context.Context, fridgeID, id uuid.UUID, am
 		return nil, err
 	}
 
-	newQty := p.Quantity - amount
-	if newQty <= 0 {
-		// Delete product if fully consumed
-		if err := s.queries.DeleteProduct(ctx, db.DeleteProductParams{
-			ID:       id,
-			FridgeID: fridgeID,
-		}); err != nil {
-			return nil, err
-		}
-		p.Quantity = 0
-		dto := toDTO(p)
-		return &dto, nil
+	pUnit := strings.ToLower(strings.TrimSpace(p.Unit))
+	cUnit := strings.ToLower(strings.TrimSpace(userUnit))
+	if cUnit == "" {
+		cUnit = pUnit
 	}
 
-	updated, err := s.queries.UpdateProductQuantity(ctx, db.UpdateProductQuantityParams{
+	var newQty float64
+	newUnit := p.Unit
+
+	isPWeight := pUnit == "г" || pUnit == "g" || pUnit == "кг" || pUnit == "kg"
+	isCWeight := cUnit == "г" || cUnit == "g" || cUnit == "кг" || cUnit == "kg"
+
+	isPVol := pUnit == "мл" || pUnit == "ml" || pUnit == "л" || pUnit == "l"
+	isCVol := cUnit == "мл" || cUnit == "ml" || cUnit == "л" || cUnit == "l"
+
+	isPPiece := pUnit == "шт" || pUnit == "pcs" || pUnit == "уп" || pUnit == "упаковка" || pUnit == "пачка" || pUnit == "банка"
+	isCPiece := cUnit == "шт" || cUnit == "pcs" || cUnit == "уп" || cUnit == "упаковка" || cUnit == "пачка" || cUnit == "банка"
+
+	if isPWeight && isCWeight {
+		totalGrams := p.Quantity
+		if pUnit == "кг" || pUnit == "kg" {
+			totalGrams *= 1000.0
+		}
+		consumedGrams := amount
+		if cUnit == "кг" || cUnit == "kg" {
+			consumedGrams *= 1000.0
+		}
+		remainingGrams := math.Round((totalGrams-consumedGrams)*100) / 100
+		if remainingGrams <= 0 {
+			if err := s.queries.DeleteProduct(ctx, db.DeleteProductParams{ID: id, FridgeID: fridgeID}); err != nil {
+				return nil, err
+			}
+			p.Quantity = 0
+			dto := toDTO(p)
+			return &dto, nil
+		}
+		if (pUnit == "кг" || pUnit == "kg") && remainingGrams >= 1000.0 {
+			newQty = math.Round((remainingGrams/1000.0)*1000) / 1000
+			newUnit = p.Unit
+		} else {
+			newQty = remainingGrams
+			newUnit = "г"
+		}
+	} else if isPVol && isCVol {
+		totalMl := p.Quantity
+		if pUnit == "л" || pUnit == "l" {
+			totalMl *= 1000.0
+		}
+		consumedMl := amount
+		if cUnit == "л" || cUnit == "l" {
+			consumedMl *= 1000.0
+		}
+		remainingMl := math.Round((totalMl-consumedMl)*100) / 100
+		if remainingMl <= 0 {
+			if err := s.queries.DeleteProduct(ctx, db.DeleteProductParams{ID: id, FridgeID: fridgeID}); err != nil {
+				return nil, err
+			}
+			p.Quantity = 0
+			dto := toDTO(p)
+			return &dto, nil
+		}
+		if (pUnit == "л" || pUnit == "l") && remainingMl >= 1000.0 {
+			newQty = math.Round((remainingMl/1000.0)*1000) / 1000
+			newUnit = p.Unit
+		} else {
+			newQty = remainingMl
+			newUnit = "мл"
+		}
+	} else if isPPiece && (isCWeight || isCVol) {
+		packWeight := nutrition.GetPackageOrPieceGrams(p.Name)
+		totalGrams := p.Quantity * packWeight
+		consumedGrams := amount
+		if cUnit == "кг" || cUnit == "kg" || cUnit == "л" || cUnit == "l" {
+			consumedGrams *= 1000.0
+		}
+		remainingGrams := math.Round((totalGrams-consumedGrams)*100) / 100
+		if remainingGrams <= 0 {
+			if err := s.queries.DeleteProduct(ctx, db.DeleteProductParams{ID: id, FridgeID: fridgeID}); err != nil {
+				return nil, err
+			}
+			p.Quantity = 0
+			dto := toDTO(p)
+			return &dto, nil
+		}
+		newQty = remainingGrams
+		if isCVol {
+			newUnit = "мл"
+		} else {
+			newUnit = "г"
+		}
+	} else if (isPWeight || isPVol) && isCPiece {
+		pieceGrams := nutrition.GetDefaultPieceGrams(p.Name)
+		consumedGrams := amount * pieceGrams
+		totalGrams := p.Quantity
+		if pUnit == "кг" || pUnit == "l" || pUnit == "л" {
+			totalGrams *= 1000.0
+		}
+		remainingGrams := math.Round((totalGrams-consumedGrams)*100) / 100
+		if remainingGrams <= 0 {
+			if err := s.queries.DeleteProduct(ctx, db.DeleteProductParams{ID: id, FridgeID: fridgeID}); err != nil {
+				return nil, err
+			}
+			p.Quantity = 0
+			dto := toDTO(p)
+			return &dto, nil
+		}
+		if (pUnit == "кг" || pUnit == "kg" || pUnit == "л" || pUnit == "l") && remainingGrams >= 1000.0 {
+			newQty = math.Round((remainingGrams/1000.0)*1000) / 1000
+			newUnit = p.Unit
+		} else {
+			newQty = remainingGrams
+			if isPVol {
+				newUnit = "мл"
+			} else {
+				newUnit = "г"
+			}
+		}
+	} else {
+		newQty = math.Round((p.Quantity-amount)*100) / 100
+		if newQty <= 0 {
+			if err := s.queries.DeleteProduct(ctx, db.DeleteProductParams{ID: id, FridgeID: fridgeID}); err != nil {
+				return nil, err
+			}
+			p.Quantity = 0
+			dto := toDTO(p)
+			return &dto, nil
+		}
+		newUnit = p.Unit
+	}
+
+	updated, err := s.queries.UpdateProductQuantityAndUnit(ctx, db.UpdateProductQuantityAndUnitParams{
 		ID:       id,
 		FridgeID: fridgeID,
 		Quantity: newQty,
+		Unit:     newUnit,
 	})
 	if err != nil {
 		return nil, err
@@ -294,6 +418,7 @@ func (s *Service) ConsumeProduct(ctx context.Context, fridgeID, id uuid.UUID, am
 	dto := toDTO(updated)
 	return &dto, nil
 }
+
 
 func (s *Service) DeleteProduct(ctx context.Context, fridgeID, id uuid.UUID) error {
 	return s.queries.DeleteProduct(ctx, db.DeleteProductParams{
