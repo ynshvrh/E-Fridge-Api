@@ -132,5 +132,9 @@ WHERE email = $1;
 DELETE FROM pending_registrations
 WHERE expires_at < NOW();
 
+-- name: DeleteUser :exec
+DELETE FROM users
+WHERE id = $1;
+
 
 

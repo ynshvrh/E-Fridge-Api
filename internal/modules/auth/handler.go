@@ -72,6 +72,7 @@ func (h *Handler) Routes(jwtSecret string) chi.Router {
 		protected.Use(middleware.Auth(jwtSecret))
 		protected.Get("/me", h.Me)
 		protected.Put("/profile", h.UpdateProfile)
+		protected.Delete("/profile", h.DeleteAccount)
 		protected.Put("/password", h.UpdatePassword)
 	})
 
@@ -94,6 +95,21 @@ func (h *Handler) UpdateProfile(w http.ResponseWriter, r *http.Request) {
 	}
 
 	response.JSON(w, http.StatusOK, updated)
+}
+
+func (h *Handler) DeleteAccount(w http.ResponseWriter, r *http.Request) {
+	userID, ok := middleware.GetUserID(r.Context())
+	if !ok {
+		response.Error(w, http.StatusUnauthorized, "Unauthorized", "UNAUTHORIZED")
+		return
+	}
+
+	if err := h.service.DeleteAccount(r.Context(), userID); err != nil {
+		response.Error(w, http.StatusInternalServerError, "Failed to delete account", "DELETE_FAILED")
+		return
+	}
+
+	response.JSON(w, http.StatusOK, map[string]string{"message": "Акаунт успішно видалено"})
 }
 
 func (h *Handler) UpdatePassword(w http.ResponseWriter, r *http.Request) {

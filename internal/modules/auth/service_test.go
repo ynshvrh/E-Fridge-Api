@@ -407,3 +407,52 @@ func TestCleanExpiredPendingRegistrationsWithDB(t *testing.T) {
 	_ = queries.DeletePendingRegistration(ctx, activeEmail)
 	_ = queries.DeletePendingRegistration(ctx, expiredEmail)
 }
+
+func TestDeleteAccountWithDB(t *testing.T) {
+	ctx := context.Background()
+	dbURL := "postgres://postgres:postgrespassword@localhost:5432/e_fridge?sslmode=disable"
+	pool, err := pgx.Connect(ctx, dbURL)
+	if err != nil {
+		t.Skip("skipping DB integration test, cannot connect to PostgreSQL")
+		return
+	}
+	defer pool.Close(ctx)
+
+	queries := db.New(pool)
+	cfg := &config.Config{
+		JWTSecret:       "test-secret",
+		AccessTokenTTL:  15 * time.Minute,
+		RefreshTokenTTL: 7 * 24 * time.Hour,
+		Environment:     "test",
+	}
+	service := NewService(queries, cfg)
+
+	testEmail := "delete_test_" + uuid.New().String()[:8] + "@example.com"
+	u, err := queries.CreateUser(ctx, db.CreateUserParams{
+		Email:        testEmail,
+		Name:         "User To Delete",
+		PasswordHash: "dummyhash",
+	})
+	if err != nil {
+		t.Fatalf("failed to create user: %v", err)
+	}
+
+	// Verify user exists
+	_, err = queries.GetUserByID(ctx, u.ID)
+	if err != nil {
+		t.Fatalf("user should exist: %v", err)
+	}
+
+	// Delete user
+	err = service.DeleteAccount(ctx, u.ID)
+	if err != nil {
+		t.Fatalf("DeleteAccount failed: %v", err)
+	}
+
+	// Verify user no longer exists
+	_, err = queries.GetUserByID(ctx, u.ID)
+	if !errors.Is(err, pgx.ErrNoRows) {
+		t.Errorf("expected ErrNoRows, got %v", err)
+	}
+}
+

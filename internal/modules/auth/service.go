@@ -535,6 +535,11 @@ func (s *Service) UpdateProfile(ctx context.Context, userID uuid.UUID, input Upd
 	}, nil
 }
 
+func (s *Service) DeleteAccount(ctx context.Context, userID uuid.UUID) error {
+	return s.queries.DeleteUser(ctx, userID)
+}
+
+
 func (s *Service) UpdatePassword(ctx context.Context, userID uuid.UUID, input UpdatePasswordInput) error {
 	if len(input.NewPassword) < 8 {
 		return errors.New("new password must be at least 8 characters")
