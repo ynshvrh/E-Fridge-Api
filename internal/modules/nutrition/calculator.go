@@ -144,3 +144,22 @@ func CalculateEstimatedNutrition(name string, quantity float64, unit string) (ca
 func round2(val float64) float64 {
 	return float64(int(val*100+0.5)) / 100
 }
+
+// GetDefaultPieceGrams returns default piece weight in grams for given food name.
+func GetDefaultPieceGrams(name string) float64 {
+	cleanName := strings.ToLower(strings.TrimSpace(name))
+	if cleanName == "" {
+		return 100.0
+	}
+	if n, ok := FoodDatabase[cleanName]; ok && n.DefaultPieceGrams > 0 {
+		return n.DefaultPieceGrams
+	}
+	for k, v := range FoodDatabase {
+		if strings.Contains(cleanName, k) || strings.Contains(k, cleanName) {
+			if v.DefaultPieceGrams > 0 {
+				return v.DefaultPieceGrams
+			}
+		}
+	}
+	return 100.0
+}

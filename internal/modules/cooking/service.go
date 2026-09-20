@@ -45,7 +45,9 @@ type CookResultDTO struct {
 
 type ConsumeMealInput struct {
 	ProductID uuid.UUID `json:"product_id"`
-	Portions  float64   `json:"portions"`
+	Portions  float64   `json:"portions,omitempty"` // backward compatibility
+	Amount    float64   `json:"amount,omitempty"`
+	Unit      string    `json:"unit,omitempty"`
 	MealType  string    `json:"meal_type"`
 }
 
@@ -230,34 +232,91 @@ func (s *Service) CookRecipe(ctx context.Context, fridgeID, userID uuid.UUID, in
 }
 
 func (s *Service) ConsumeMeal(ctx context.Context, fridgeID, userID uuid.UUID, input ConsumeMealInput) (*CookResultDTO, error) {
-	if input.Portions <= 0 {
-		input.Portions = 1.0
-	}
-
-	// Get product to inspect nutrition
+	// Get product to inspect nutrition and storage unit
 	prod, err := s.productsService.GetProduct(ctx, fridgeID, input.ProductID)
 	if err != nil {
 		return nil, err
 	}
 
-	// Consume product
-	updatedProd, err := s.productsService.ConsumeProduct(ctx, fridgeID, input.ProductID, input.Portions)
+	amount := input.Amount
+	unit := strings.TrimSpace(input.Unit)
+	if amount <= 0 {
+		amount = input.Portions
+	}
+	if amount <= 0 {
+		amount = 1.0
+	}
+	if unit == "" {
+		unit = prod.Unit
+	}
+
+	mealType := input.MealType
+	if mealType == "" {
+		mealType = "snack"
+	}
+
+	// 1. Calculate quantity to deduct from product in fridge
+	deductQty := convertUnitsWithFood(amount, unit, prod.Unit, prod.Name)
+	if deductQty <= 0 {
+		deductQty = amount
+	}
+
+	// 2. Consume from fridge
+	updatedProd, err := s.productsService.ConsumeProduct(ctx, fridgeID, input.ProductID, deductQty)
 	if err != nil {
 		return nil, err
 	}
 
-	// Log to nutrition
-	cals := int32(float64(prod.Calories) * input.Portions)
-	p := round2(prod.Protein * input.Portions)
-	f := round2(prod.Fat * input.Portions)
-	c := round2(prod.Carbs * input.Portions)
+	// 3. Calculate accurate nutrition for the logged meal
+	var cals int32
+	var p, f, c float64
 
+	prodUnit := strings.ToLower(strings.TrimSpace(prod.Unit))
+
+	if prod.Calories == 0 && prod.Protein == 0 && prod.Fat == 0 && prod.Carbs == 0 {
+		// If product had no nutrition info, calculate estimated nutrition based on food name and consumed amount
+		calcCal, calcP, calcF, calcC := nutrition.CalculateEstimatedNutrition(prod.Name, amount, unit)
+		cals = int32(calcCal)
+		p = calcP
+		f = calcF
+		c = calcC
+	} else if prod.Category == "prepared-meals" || prodUnit == "порц" || prodUnit == "порція" {
+		// For prepared meals, product nutrition is stored per 1 portion
+		portionsConsumed := convertUnitsWithFood(amount, unit, "порц", prod.Name)
+		if portionsConsumed <= 0 {
+			portionsConsumed = 1.0
+		}
+		cals = int32(float64(prod.Calories) * portionsConsumed)
+		p = round2(prod.Protein * portionsConsumed)
+		f = round2(prod.Fat * portionsConsumed)
+		c = round2(prod.Carbs * portionsConsumed)
+	} else if prodUnit == "шт" || prodUnit == "pcs" {
+		// For piece-based products, product nutrition is stored per 1 piece
+		piecesConsumed := convertUnitsWithFood(amount, unit, "шт", prod.Name)
+		if piecesConsumed <= 0 {
+			piecesConsumed = 1.0
+		}
+		cals = int32(float64(prod.Calories) * piecesConsumed)
+		p = round2(prod.Protein * piecesConsumed)
+		f = round2(prod.Fat * piecesConsumed)
+		c = round2(prod.Carbs * piecesConsumed)
+	} else {
+		// For weight/volume products (kg, g, l, ml), product nutrition is standard per 100g/100ml
+		gramsConsumed := convertUnitsWithFood(amount, unit, "г", prod.Name)
+		factor := gramsConsumed / 100.0
+		cals = int32(float64(prod.Calories) * factor)
+		p = round2(prod.Protein * factor)
+		f = round2(prod.Fat * factor)
+		c = round2(prod.Carbs * factor)
+	}
+
+	// 4. Log to nutrition
 	logged, err := s.nutritionService.LogMeal(ctx, userID, nutrition.LogMealInput{
 		Date:     time.Now().Format("2006-01-02"),
-		MealType: input.MealType,
+		MealType: mealType,
 		FoodName: prod.Name,
-		Quantity: input.Portions,
-		Unit:     prod.Unit,
+		Quantity: amount,
+		Unit:     unit,
 		Calories: cals,
 		Protein:  p,
 		Fat:      f,
@@ -274,14 +333,18 @@ func (s *Service) ConsumeMeal(ctx context.Context, fridgeID, userID uuid.UUID, i
 }
 
 func convertUnits(qty float64, fromUnit, toUnit string) float64 {
+	return convertUnitsWithFood(qty, fromUnit, toUnit, "")
+}
+
+func convertUnitsWithFood(qty float64, fromUnit, toUnit, foodName string) float64 {
 	from := strings.ToLower(strings.TrimSpace(fromUnit))
 	to := strings.ToLower(strings.TrimSpace(toUnit))
 
-	if from == to {
+	if from == to || from == "" || to == "" {
 		return qty
 	}
 
-	// Weight conversions
+	// Direct weight conversions
 	if (from == "kg" || from == "кг") && (to == "g" || to == "г") {
 		return qty * 1000.0
 	}
@@ -289,7 +352,7 @@ func convertUnits(qty float64, fromUnit, toUnit string) float64 {
 		return qty / 1000.0
 	}
 
-	// Volume conversions
+	// Direct volume conversions
 	if (from == "l" || from == "л") && (to == "ml" || to == "мл") {
 		return qty * 1000.0
 	}
@@ -297,8 +360,45 @@ func convertUnits(qty float64, fromUnit, toUnit string) float64 {
 		return qty / 1000.0
 	}
 
+	// Serving conversions
+	if (from == "порц" || from == "порція") && (to == "порц" || to == "порція") {
+		return qty
+	}
+	if (from == "порц" || from == "порція") && (to == "g" || to == "г" || to == "ml" || to == "мл") {
+		return qty * 300.0
+	}
+	if (from == "порц" || from == "порція") && (to == "kg" || to == "кг" || to == "l" || to == "л") {
+		return (qty * 300.0) / 1000.0
+	}
+	if (from == "g" || from == "г" || from == "ml" || from == "мл") && (to == "порц" || to == "порція") {
+		return qty / 300.0
+	}
+	if (from == "kg" || from == "кг" || from == "l" || from == "л") && (to == "порц" || to == "порція") {
+		return (qty * 1000.0) / 300.0
+	}
+
+	// Piece conversions
+	pieceGrams := nutrition.GetDefaultPieceGrams(foodName)
+	if pieceGrams <= 0 {
+		pieceGrams = 100.0
+	}
+
+	if (from == "шт" || from == "pcs") && (to == "g" || to == "г" || to == "ml" || to == "мл") {
+		return qty * pieceGrams
+	}
+	if (from == "шт" || from == "pcs") && (to == "kg" || to == "кг" || to == "l" || to == "л") {
+		return (qty * pieceGrams) / 1000.0
+	}
+	if (from == "g" || from == "г" || from == "ml" || from == "мл") && (to == "шт" || to == "pcs") {
+		return qty / pieceGrams
+	}
+	if (from == "kg" || from == "кг" || from == "l" || from == "л") && (to == "шт" || to == "pcs") {
+		return (qty * 1000.0) / pieceGrams
+	}
+
 	return qty
 }
+
 
 func round2(val float64) float64 {
 	return float64(int(val*100+0.5)) / 100
