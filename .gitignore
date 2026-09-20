@@ -1,5 +1,39 @@
-.env
+# Binaries and build outputs
 bin/
+dist/
+build/
 *.exe
+*.exe~
+*.dll
+*.so
+*.dylib
 *.test
+*.out
+
+# Environment variables & secrets
+.env
+.env.*
+!.env.example
+
+# Go test, benchmark and coverage artifacts
+coverage.txt
+coverage.html
+profile.out
+pprof/
+
+# IDE and Editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+*.sublime-project
+*.sublime-workspace
+
+# OS and system files
 .DS_Store
+Thumbs.db
+
+# Logs and temporary files
+*.log
+tmp/
