@@ -2,6 +2,7 @@ package planner
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"time"
 
@@ -36,6 +37,8 @@ func (h *Handler) Routes(jwtSecret string, queries *db.Queries) chi.Router {
 	r.Get("/", h.List)
 	r.Post("/", h.Create)
 	r.With(h.aiGuard.Middleware()).Post("/generate", h.Generate)
+	r.With(h.aiGuard.Middleware()).Post("/generate-day", h.GenerateDay)
+	r.With(h.aiGuard.Middleware()).Post("/generate-meal", h.GenerateMeal)
 	r.Delete("/clear", h.Clear)
 
 	r.Get("/{id}", h.Get)
@@ -194,3 +197,49 @@ func (h *Handler) Generate(w http.ResponseWriter, r *http.Request) {
 
 	response.JSON(w, http.StatusOK, plans)
 }
+
+func (h *Handler) GenerateDay(w http.ResponseWriter, r *http.Request) {
+	fridgeID, _ := middleware.GetFridgeID(r.Context())
+	userID, _ := middleware.GetUserID(r.Context())
+
+	var input GenerateDayInput
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		input.Date = time.Now().Format("2006-01-02")
+	}
+
+	meals, err := h.service.GenerateDayWithAI(r.Context(), fridgeID, userID, input)
+	if err != nil {
+		if errors.Is(err, ErrDayAlreadyGenerated) {
+			response.Error(w, http.StatusConflict, err.Error(), "DAY_ALREADY_GENERATED")
+			return
+		}
+		response.Error(w, http.StatusInternalServerError, err.Error(), "GENERATE_DAY_FAILED")
+		return
+	}
+
+	response.JSON(w, http.StatusOK, meals)
+}
+
+func (h *Handler) GenerateMeal(w http.ResponseWriter, r *http.Request) {
+	fridgeID, _ := middleware.GetFridgeID(r.Context())
+	userID, _ := middleware.GetUserID(r.Context())
+
+	var input GenerateMealInput
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		response.Error(w, http.StatusBadRequest, "Invalid request body", "INVALID_REQUEST")
+		return
+	}
+
+	meal, err := h.service.GenerateMealWithAI(r.Context(), fridgeID, userID, input)
+	if err != nil {
+		if errors.Is(err, ErrInvalidMealType) {
+			response.Error(w, http.StatusBadRequest, err.Error(), "INVALID_MEAL_TYPE")
+			return
+		}
+		response.Error(w, http.StatusInternalServerError, err.Error(), "GENERATE_MEAL_FAILED")
+		return
+	}
+
+	response.JSON(w, http.StatusOK, meal)
+}
+

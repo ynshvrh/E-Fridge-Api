@@ -53,6 +53,7 @@ type MealPlan struct {
 	Notes       string
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
+	RecipeData  []byte
 }
 
 type NutritionLog struct {

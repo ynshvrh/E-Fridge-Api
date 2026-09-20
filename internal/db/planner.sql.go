@@ -7,6 +7,7 @@ package db
 
 import (
 	"context"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -28,13 +29,31 @@ func (q *Queries) ClearMealPlansByDateRange(ctx context.Context, arg ClearMealPl
 	return err
 }
 
+const countMealPlansByFridgeAndDate = `-- name: CountMealPlansByFridgeAndDate :one
+SELECT COUNT(*)
+FROM meal_plans
+WHERE fridge_id = $1 AND date = $2
+`
+
+type CountMealPlansByFridgeAndDateParams struct {
+	FridgeID uuid.UUID
+	Date     pgtype.Date
+}
+
+func (q *Queries) CountMealPlansByFridgeAndDate(ctx context.Context, arg CountMealPlansByFridgeAndDateParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countMealPlansByFridgeAndDate, arg.FridgeID, arg.Date)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const createMealPlan = `-- name: CreateMealPlan :one
 INSERT INTO meal_plans (
-    fridge_id, user_id, date, meal_type, recipe_title, recipe_id, calories, protein, fat, carbs, notes
+    fridge_id, user_id, date, meal_type, recipe_title, recipe_id, calories, protein, fat, carbs, notes, recipe_data
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12
 )
-RETURNING id, fridge_id, user_id, date, meal_type, recipe_title, recipe_id, calories, protein, fat, carbs, is_completed, notes, created_at, updated_at
+RETURNING id, fridge_id, user_id, date, meal_type, recipe_title, recipe_id, calories, protein, fat, carbs, is_completed, notes, recipe_data, created_at, updated_at
 `
 
 type CreateMealPlanParams struct {
@@ -49,9 +68,29 @@ type CreateMealPlanParams struct {
 	Fat         float64
 	Carbs       float64
 	Notes       string
+	RecipeData  []byte
 }
 
-func (q *Queries) CreateMealPlan(ctx context.Context, arg CreateMealPlanParams) (MealPlan, error) {
+type CreateMealPlanRow struct {
+	ID          uuid.UUID
+	FridgeID    uuid.UUID
+	UserID      uuid.UUID
+	Date        pgtype.Date
+	MealType    string
+	RecipeTitle string
+	RecipeID    pgtype.UUID
+	Calories    int32
+	Protein     float64
+	Fat         float64
+	Carbs       float64
+	IsCompleted bool
+	Notes       string
+	RecipeData  []byte
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+}
+
+func (q *Queries) CreateMealPlan(ctx context.Context, arg CreateMealPlanParams) (CreateMealPlanRow, error) {
 	row := q.db.QueryRow(ctx, createMealPlan,
 		arg.FridgeID,
 		arg.UserID,
@@ -64,8 +103,9 @@ func (q *Queries) CreateMealPlan(ctx context.Context, arg CreateMealPlanParams) 
 		arg.Fat,
 		arg.Carbs,
 		arg.Notes,
+		arg.RecipeData,
 	)
-	var i MealPlan
+	var i CreateMealPlanRow
 	err := row.Scan(
 		&i.ID,
 		&i.FridgeID,
@@ -80,6 +120,7 @@ func (q *Queries) CreateMealPlan(ctx context.Context, arg CreateMealPlanParams) 
 		&i.Carbs,
 		&i.IsCompleted,
 		&i.Notes,
+		&i.RecipeData,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -101,8 +142,24 @@ func (q *Queries) DeleteMealPlan(ctx context.Context, arg DeleteMealPlanParams) 
 	return err
 }
 
+const deleteMealPlanByFridgeDateAndType = `-- name: DeleteMealPlanByFridgeDateAndType :exec
+DELETE FROM meal_plans
+WHERE fridge_id = $1 AND date = $2 AND meal_type = $3
+`
+
+type DeleteMealPlanByFridgeDateAndTypeParams struct {
+	FridgeID uuid.UUID
+	Date     pgtype.Date
+	MealType string
+}
+
+func (q *Queries) DeleteMealPlanByFridgeDateAndType(ctx context.Context, arg DeleteMealPlanByFridgeDateAndTypeParams) error {
+	_, err := q.db.Exec(ctx, deleteMealPlanByFridgeDateAndType, arg.FridgeID, arg.Date, arg.MealType)
+	return err
+}
+
 const getMealPlanByID = `-- name: GetMealPlanByID :one
-SELECT id, fridge_id, user_id, date, meal_type, recipe_title, recipe_id, calories, protein, fat, carbs, is_completed, notes, created_at, updated_at
+SELECT id, fridge_id, user_id, date, meal_type, recipe_title, recipe_id, calories, protein, fat, carbs, is_completed, notes, recipe_data, created_at, updated_at
 FROM meal_plans
 WHERE id = $1 AND fridge_id = $2
 `
@@ -112,9 +169,28 @@ type GetMealPlanByIDParams struct {
 	FridgeID uuid.UUID
 }
 
-func (q *Queries) GetMealPlanByID(ctx context.Context, arg GetMealPlanByIDParams) (MealPlan, error) {
+type GetMealPlanByIDRow struct {
+	ID          uuid.UUID
+	FridgeID    uuid.UUID
+	UserID      uuid.UUID
+	Date        pgtype.Date
+	MealType    string
+	RecipeTitle string
+	RecipeID    pgtype.UUID
+	Calories    int32
+	Protein     float64
+	Fat         float64
+	Carbs       float64
+	IsCompleted bool
+	Notes       string
+	RecipeData  []byte
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+}
+
+func (q *Queries) GetMealPlanByID(ctx context.Context, arg GetMealPlanByIDParams) (GetMealPlanByIDRow, error) {
 	row := q.db.QueryRow(ctx, getMealPlanByID, arg.ID, arg.FridgeID)
-	var i MealPlan
+	var i GetMealPlanByIDRow
 	err := row.Scan(
 		&i.ID,
 		&i.FridgeID,
@@ -129,14 +205,89 @@ func (q *Queries) GetMealPlanByID(ctx context.Context, arg GetMealPlanByIDParams
 		&i.Carbs,
 		&i.IsCompleted,
 		&i.Notes,
+		&i.RecipeData,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
 	return i, err
 }
 
+const listMealPlansByFridgeAndDate = `-- name: ListMealPlansByFridgeAndDate :many
+SELECT id, fridge_id, user_id, date, meal_type, recipe_title, recipe_id, calories, protein, fat, carbs, is_completed, notes, recipe_data, created_at, updated_at
+FROM meal_plans
+WHERE fridge_id = $1 AND date = $2
+ORDER BY 
+    CASE meal_type 
+        WHEN 'breakfast' THEN 1 
+        WHEN 'lunch' THEN 2 
+        WHEN 'dinner' THEN 3 
+        ELSE 4 
+    END
+`
+
+type ListMealPlansByFridgeAndDateParams struct {
+	FridgeID uuid.UUID
+	Date     pgtype.Date
+}
+
+type ListMealPlansByFridgeAndDateRow struct {
+	ID          uuid.UUID
+	FridgeID    uuid.UUID
+	UserID      uuid.UUID
+	Date        pgtype.Date
+	MealType    string
+	RecipeTitle string
+	RecipeID    pgtype.UUID
+	Calories    int32
+	Protein     float64
+	Fat         float64
+	Carbs       float64
+	IsCompleted bool
+	Notes       string
+	RecipeData  []byte
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+}
+
+func (q *Queries) ListMealPlansByFridgeAndDate(ctx context.Context, arg ListMealPlansByFridgeAndDateParams) ([]ListMealPlansByFridgeAndDateRow, error) {
+	rows, err := q.db.Query(ctx, listMealPlansByFridgeAndDate, arg.FridgeID, arg.Date)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListMealPlansByFridgeAndDateRow
+	for rows.Next() {
+		var i ListMealPlansByFridgeAndDateRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.FridgeID,
+			&i.UserID,
+			&i.Date,
+			&i.MealType,
+			&i.RecipeTitle,
+			&i.RecipeID,
+			&i.Calories,
+			&i.Protein,
+			&i.Fat,
+			&i.Carbs,
+			&i.IsCompleted,
+			&i.Notes,
+			&i.RecipeData,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listMealPlansByFridgeAndDateRange = `-- name: ListMealPlansByFridgeAndDateRange :many
-SELECT id, fridge_id, user_id, date, meal_type, recipe_title, recipe_id, calories, protein, fat, carbs, is_completed, notes, created_at, updated_at
+SELECT id, fridge_id, user_id, date, meal_type, recipe_title, recipe_id, calories, protein, fat, carbs, is_completed, notes, recipe_data, created_at, updated_at
 FROM meal_plans
 WHERE fridge_id = $1 AND date >= $2 AND date <= $3
 ORDER BY date ASC, 
@@ -154,15 +305,34 @@ type ListMealPlansByFridgeAndDateRangeParams struct {
 	Date_2   pgtype.Date
 }
 
-func (q *Queries) ListMealPlansByFridgeAndDateRange(ctx context.Context, arg ListMealPlansByFridgeAndDateRangeParams) ([]MealPlan, error) {
+type ListMealPlansByFridgeAndDateRangeRow struct {
+	ID          uuid.UUID
+	FridgeID    uuid.UUID
+	UserID      uuid.UUID
+	Date        pgtype.Date
+	MealType    string
+	RecipeTitle string
+	RecipeID    pgtype.UUID
+	Calories    int32
+	Protein     float64
+	Fat         float64
+	Carbs       float64
+	IsCompleted bool
+	Notes       string
+	RecipeData  []byte
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+}
+
+func (q *Queries) ListMealPlansByFridgeAndDateRange(ctx context.Context, arg ListMealPlansByFridgeAndDateRangeParams) ([]ListMealPlansByFridgeAndDateRangeRow, error) {
 	rows, err := q.db.Query(ctx, listMealPlansByFridgeAndDateRange, arg.FridgeID, arg.Date, arg.Date_2)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []MealPlan
+	var items []ListMealPlansByFridgeAndDateRangeRow
 	for rows.Next() {
-		var i MealPlan
+		var i ListMealPlansByFridgeAndDateRangeRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.FridgeID,
@@ -177,6 +347,7 @@ func (q *Queries) ListMealPlansByFridgeAndDateRange(ctx context.Context, arg Lis
 			&i.Carbs,
 			&i.IsCompleted,
 			&i.Notes,
+			&i.RecipeData,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 		); err != nil {
@@ -194,7 +365,7 @@ const toggleMealPlanCompleted = `-- name: ToggleMealPlanCompleted :one
 UPDATE meal_plans
 SET is_completed = $3, updated_at = NOW()
 WHERE id = $1 AND fridge_id = $2
-RETURNING id, fridge_id, user_id, date, meal_type, recipe_title, recipe_id, calories, protein, fat, carbs, is_completed, notes, created_at, updated_at
+RETURNING id, fridge_id, user_id, date, meal_type, recipe_title, recipe_id, calories, protein, fat, carbs, is_completed, notes, recipe_data, created_at, updated_at
 `
 
 type ToggleMealPlanCompletedParams struct {
@@ -203,9 +374,28 @@ type ToggleMealPlanCompletedParams struct {
 	IsCompleted bool
 }
 
-func (q *Queries) ToggleMealPlanCompleted(ctx context.Context, arg ToggleMealPlanCompletedParams) (MealPlan, error) {
+type ToggleMealPlanCompletedRow struct {
+	ID          uuid.UUID
+	FridgeID    uuid.UUID
+	UserID      uuid.UUID
+	Date        pgtype.Date
+	MealType    string
+	RecipeTitle string
+	RecipeID    pgtype.UUID
+	Calories    int32
+	Protein     float64
+	Fat         float64
+	Carbs       float64
+	IsCompleted bool
+	Notes       string
+	RecipeData  []byte
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+}
+
+func (q *Queries) ToggleMealPlanCompleted(ctx context.Context, arg ToggleMealPlanCompletedParams) (ToggleMealPlanCompletedRow, error) {
 	row := q.db.QueryRow(ctx, toggleMealPlanCompleted, arg.ID, arg.FridgeID, arg.IsCompleted)
-	var i MealPlan
+	var i ToggleMealPlanCompletedRow
 	err := row.Scan(
 		&i.ID,
 		&i.FridgeID,
@@ -220,6 +410,7 @@ func (q *Queries) ToggleMealPlanCompleted(ctx context.Context, arg ToggleMealPla
 		&i.Carbs,
 		&i.IsCompleted,
 		&i.Notes,
+		&i.RecipeData,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -238,9 +429,10 @@ SET
     fat = $9,
     carbs = $10,
     notes = $11,
+    recipe_data = $12,
     updated_at = NOW()
 WHERE id = $1 AND fridge_id = $2
-RETURNING id, fridge_id, user_id, date, meal_type, recipe_title, recipe_id, calories, protein, fat, carbs, is_completed, notes, created_at, updated_at
+RETURNING id, fridge_id, user_id, date, meal_type, recipe_title, recipe_id, calories, protein, fat, carbs, is_completed, notes, recipe_data, created_at, updated_at
 `
 
 type UpdateMealPlanParams struct {
@@ -255,9 +447,29 @@ type UpdateMealPlanParams struct {
 	Fat         float64
 	Carbs       float64
 	Notes       string
+	RecipeData  []byte
 }
 
-func (q *Queries) UpdateMealPlan(ctx context.Context, arg UpdateMealPlanParams) (MealPlan, error) {
+type UpdateMealPlanRow struct {
+	ID          uuid.UUID
+	FridgeID    uuid.UUID
+	UserID      uuid.UUID
+	Date        pgtype.Date
+	MealType    string
+	RecipeTitle string
+	RecipeID    pgtype.UUID
+	Calories    int32
+	Protein     float64
+	Fat         float64
+	Carbs       float64
+	IsCompleted bool
+	Notes       string
+	RecipeData  []byte
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+}
+
+func (q *Queries) UpdateMealPlan(ctx context.Context, arg UpdateMealPlanParams) (UpdateMealPlanRow, error) {
 	row := q.db.QueryRow(ctx, updateMealPlan,
 		arg.ID,
 		arg.FridgeID,
@@ -270,8 +482,9 @@ func (q *Queries) UpdateMealPlan(ctx context.Context, arg UpdateMealPlanParams) 
 		arg.Fat,
 		arg.Carbs,
 		arg.Notes,
+		arg.RecipeData,
 	)
-	var i MealPlan
+	var i UpdateMealPlanRow
 	err := row.Scan(
 		&i.ID,
 		&i.FridgeID,
@@ -286,6 +499,7 @@ func (q *Queries) UpdateMealPlan(ctx context.Context, arg UpdateMealPlanParams) 
 		&i.Carbs,
 		&i.IsCompleted,
 		&i.Notes,
+		&i.RecipeData,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
