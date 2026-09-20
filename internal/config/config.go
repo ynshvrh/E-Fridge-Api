@@ -28,6 +28,12 @@ type Config struct {
 	OpenRouterModels []string
 	ResendAPIKey     string
 	ResendFromEmail  string
+	EmailProvider    string
+	SMTPHost         string
+	SMTPPort         string
+	SMTPUser         string
+	SMTPPassword     string
+	SMTPFrom         string
 }
 
 func Load() *Config {
@@ -55,6 +61,13 @@ func Load() *Config {
 	resendKey := getEnv("RESEND_API_KEY", "")
 	resendFrom := getEnv("RESEND_FROM_EMAIL", "E-Fridge <onboarding@resend.dev>")
 
+	emailProvider := getEnv("EMAIL_PROVIDER", "resend")
+	smtpHost := getEnv("SMTP_HOST", "smtp.gmail.com")
+	smtpPort := getEnv("SMTP_PORT", "587")
+	smtpUser := getEnv("SMTP_USER", "efr1dg3@gmail.com")
+	smtpPass := getEnv("SMTP_PASS", "")
+	smtpFrom := getEnv("SMTP_FROM", "E-Fridge <efr1dg3@gmail.com>")
+
 	if env == "production" && len(jwtSecret) < 32 {
 		log.Fatal("JWT_SECRET must be at least 32 characters in production")
 	}
@@ -77,6 +90,12 @@ func Load() *Config {
 		OpenRouterModels: []string{freeModel, fallbackModel},
 		ResendAPIKey:     resendKey,
 		ResendFromEmail:  resendFrom,
+		EmailProvider:    emailProvider,
+		SMTPHost:         smtpHost,
+		SMTPPort:         smtpPort,
+		SMTPUser:         smtpUser,
+		SMTPPassword:     smtpPass,
+		SMTPFrom:         smtpFrom,
 	}
 }
 

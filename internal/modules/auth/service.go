@@ -35,7 +35,7 @@ func NewService(queries *db.Queries, cfg *config.Config) *Service {
 	return &Service{
 		queries: queries,
 		cfg:     cfg,
-		mailer:  NewResendMailer(cfg.ResendAPIKey, cfg.ResendFromEmail, cfg.Environment),
+		mailer:  NewMailer(cfg),
 	}
 }
 
