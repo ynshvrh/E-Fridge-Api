@@ -46,7 +46,7 @@ RETURNING id, name, owner_id, created_at, updated_at;
 -- name: AddFridgeMember :one
 INSERT INTO fridge_members (fridge_id, user_id, role)
 VALUES ($1, $2, $3)
-ON CONFLICT (fridge_id, user_id) DO UPDATE SET role = EXCLUDED.role
+ON CONFLICT (fridge_id, user_id) DO NOTHING
 RETURNING fridge_id, user_id, role, joined_at;
 
 -- name: GetFridgesByUserID :many
@@ -104,20 +104,27 @@ DELETE FROM fridge_members
 WHERE fridge_id = $1 AND user_id = $2;
 
 -- name: CreateOrUpdatePendingRegistration :one
-INSERT INTO pending_registrations (email, name, password_hash, verification_code, expires_at)
-VALUES ($1, $2, $3, $4, $5)
+INSERT INTO pending_registrations (email, name, password_hash, verification_code, expires_at, attempts_left)
+VALUES ($1, $2, $3, $4, $5, $6)
 ON CONFLICT (email) DO UPDATE SET
     name = EXCLUDED.name,
     password_hash = EXCLUDED.password_hash,
     verification_code = EXCLUDED.verification_code,
     expires_at = EXCLUDED.expires_at,
+    attempts_left = EXCLUDED.attempts_left,
     created_at = NOW()
-RETURNING id, email, name, password_hash, verification_code, expires_at, created_at;
+RETURNING id, email, name, password_hash, verification_code, expires_at, attempts_left, created_at;
 
 -- name: GetPendingRegistrationByEmail :one
-SELECT id, email, name, password_hash, verification_code, expires_at, created_at
+SELECT id, email, name, password_hash, verification_code, expires_at, attempts_left, created_at
 FROM pending_registrations
 WHERE email = $1;
+
+-- name: DecrementPendingRegistrationAttempts :one
+UPDATE pending_registrations
+SET attempts_left = attempts_left - 1
+WHERE email = $1
+RETURNING attempts_left;
 
 -- name: DeletePendingRegistration :exec
 DELETE FROM pending_registrations
@@ -125,7 +132,7 @@ WHERE email = $1;
 
 -- name: UpdatePendingRegistrationCode :exec
 UPDATE pending_registrations
-SET verification_code = $2, expires_at = $3
+SET verification_code = $2, expires_at = $3, attempts_left = $4
 WHERE email = $1;
 
 -- name: CleanExpiredPendingRegistrations :exec
