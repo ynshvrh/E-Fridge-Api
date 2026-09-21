@@ -2,26 +2,34 @@ package nutrition
 
 import (
 	"context"
+	"os"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/ynshvrh/E-Fridge-Api/internal/database"
 	"github.com/ynshvrh/E-Fridge-Api/internal/db"
 )
 
+func getTestDBURL() string {
+	if url := os.Getenv("DATABASE_URL"); url != "" {
+		return url
+	}
+	return "postgres://postgres:postgrespassword@localhost:5432/e_fridge?sslmode=disable"
+}
+
 func TestUpdateNutritionLogWithDB(t *testing.T) {
 	ctx := context.Background()
-	dbURL := "postgres://postgres:postgrespassword@localhost:5432/e_fridge?sslmode=disable"
-	pool, err := pgx.Connect(ctx, dbURL)
+	dbURL := getTestDBURL()
+	dbConn, err := database.Connect(ctx, dbURL)
 	if err != nil {
 		t.Skip("skipping DB test, cannot connect to PostgreSQL")
 		return
 	}
-	defer pool.Close(ctx)
+	defer dbConn.Close()
 
-	queries := db.New(pool)
+	queries := db.New(dbConn.Pool)
 	service := NewService(queries)
 
 	// Setup user
@@ -34,7 +42,7 @@ func TestUpdateNutritionLogWithDB(t *testing.T) {
 		t.Fatalf("failed to create user: %v", err)
 	}
 	defer func() {
-		_, _ = pool.Exec(ctx, "DELETE FROM users WHERE id = $1", u.ID)
+		_, _ = dbConn.Pool.Exec(ctx, "DELETE FROM users WHERE id = $1", u.ID)
 	}()
 
 	// 1. Log a meal
@@ -77,15 +85,15 @@ func TestUpdateNutritionLogWithDB(t *testing.T) {
 
 func TestDeleteLogRestoresToFridgeWithDB(t *testing.T) {
 	ctx := context.Background()
-	dbURL := "postgres://postgres:postgrespassword@localhost:5432/e_fridge?sslmode=disable"
-	pool, err := pgx.Connect(ctx, dbURL)
+	dbURL := getTestDBURL()
+	dbConn, err := database.Connect(ctx, dbURL)
 	if err != nil {
 		t.Skip("skipping DB test, cannot connect to PostgreSQL")
 		return
 	}
-	defer pool.Close(ctx)
+	defer dbConn.Close()
 
-	queries := db.New(pool)
+	queries := db.New(dbConn.Pool)
 	service := NewService(queries)
 
 	// Setup user & fridge
@@ -98,7 +106,7 @@ func TestDeleteLogRestoresToFridgeWithDB(t *testing.T) {
 		t.Fatalf("failed to create user: %v", err)
 	}
 	defer func() {
-		_, _ = pool.Exec(ctx, "DELETE FROM users WHERE id = $1", u.ID)
+		_, _ = dbConn.Pool.Exec(ctx, "DELETE FROM users WHERE id = $1", u.ID)
 	}()
 
 	fridge, err := queries.CreateFridge(ctx, db.CreateFridgeParams{

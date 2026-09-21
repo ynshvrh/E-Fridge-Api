@@ -49,10 +49,10 @@ jobs:
 
       - name: Run unit and integration tests
         env:
-          DATABASE_URL: postgres://postgres:postgrespassword@localhost:5432/e_fridge?sslmode=disable
+          DATABASE_URL: postgres://postgres:postgrespassword@127.0.0.1:5432/e_fridge?sslmode=disable
           JWT_SECRET: test-secret-key-12345678901234567890
           APP_ENV: test
-        run: go test -v -race -coverprofile=coverage.txt ./...
+        run: go test -v -race -p 1 -coverprofile=coverage.txt ./...
 
       - name: Build binary
         run: CGO_ENABLED=0 go build -v -o bin/api ./cmd/api
