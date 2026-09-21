@@ -81,6 +81,7 @@ type PendingRegistration struct {
 	VerificationCode string
 	ExpiresAt        time.Time
 	CreatedAt        time.Time
+	AttemptsLeft     int32
 }
 
 type Product struct {

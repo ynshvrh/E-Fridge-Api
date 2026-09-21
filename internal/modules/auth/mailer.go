@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"io"
 	"log/slog"
 	"math/big"
@@ -271,6 +272,8 @@ func (m *ResendMailer) sendResend(ctx context.Context, toEmail, subject, htmlBod
 }
 
 func buildVerificationHTML(name, code string) string {
+	escapedName := html.EscapeString(name)
+	escapedCode := html.EscapeString(code)
 	return fmt.Sprintf(`<!DOCTYPE html>
 <html lang="uk">
 <head>
@@ -279,7 +282,8 @@ func buildVerificationHTML(name, code string) string {
   <style>
     body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #fafaf9; margin: 0; padding: 24px; color: #1c1917; }
     .card { max-width: 480px; margin: 0 auto; background: #ffffff; border-radius: 24px; padding: 36px 32px; border: 1px solid #e7e5e4; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05); }
-    .badge { width: 56px; height: 56px; margin: 0 auto 20px; border-radius: 18px; background: #ecfdf5; border: 1px solid #a7f3d0; text-align: center; line-height: 56px; font-size: 28px; }
+    .badge { width: 56px; height: 56px; margin: 0 auto 20px; border-radius: 18px; background: #ecfdf5; border: 1px solid #a7f3d0; display: flex; align-items: center; justify-content: center; text-align: center; line-height: 56px; }
+    .badge svg { vertical-align: middle; }
     h1 { font-size: 22px; font-weight: 700; text-align: center; color: #1c1917; margin: 0 0 8px 0; }
     p { font-size: 14px; line-height: 1.6; color: #57534e; text-align: center; margin: 0 0 24px 0; }
     .code-box { background: #f0fdf4; border: 2px dashed #86efac; border-radius: 16px; padding: 18px 24px; text-align: center; margin: 28px 0; }
@@ -290,7 +294,9 @@ func buildVerificationHTML(name, code string) string {
 </head>
 <body>
   <div class="card">
-    <div class="badge">🥦</div>
+    <div class="badge">
+      <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#15803d" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+    </div>
     <h1>Підтвердження пошти</h1>
     <p>Вітаємо, <strong>%s</strong>! Щоб завершити створення акаунту в <strong>E-Fridge</strong>, введіть цей код:</p>
     <div class="code-box">
@@ -300,40 +306,44 @@ func buildVerificationHTML(name, code string) string {
     <div class="footer">&copy; E-Fridge Ecosystem</div>
   </div>
 </body>
-</html>`, name, code)
+</html>`, escapedName, escapedCode)
 }
 
 func buildGoogleWelcomeHTML(name, password string) string {
+	escapedName := html.EscapeString(name)
+	escapedPassword := html.EscapeString(password)
 	return fmt.Sprintf(`<!DOCTYPE html>
 <html lang="uk">
 <head>
   <meta charset="utf-8">
-  <title>Ваш пароль для входу в E-Fridge</title>
+  <title>Вітаємо в E-Fridge</title>
   <style>
     body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #fafaf9; margin: 0; padding: 24px; color: #1c1917; }
     .card { max-width: 480px; margin: 0 auto; background: #ffffff; border-radius: 24px; padding: 36px 32px; border: 1px solid #e7e5e4; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05); }
-    .badge { width: 56px; height: 56px; margin: 0 auto 20px; border-radius: 18px; background: #ecfdf5; border: 1px solid #a7f3d0; text-align: center; line-height: 56px; font-size: 28px; }
+    .badge { width: 56px; height: 56px; margin: 0 auto 20px; border-radius: 18px; background: #ecfdf5; border: 1px solid #a7f3d0; display: flex; align-items: center; justify-content: center; text-align: center; line-height: 56px; }
     h1 { font-size: 22px; font-weight: 700; text-align: center; color: #1c1917; margin: 0 0 8px 0; }
     p { font-size: 14px; line-height: 1.6; color: #57534e; text-align: center; margin: 0 0 24px 0; }
     .code-box { background: #f0fdf4; border: 2px dashed #86efac; border-radius: 16px; padding: 18px 24px; text-align: center; margin: 28px 0; }
-    .code { font-size: 22px; font-weight: 700; letter-spacing: 2px; color: #15803d; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+    .code { font-size: 20px; font-weight: 700; letter-spacing: 2px; color: #15803d; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
     .note { font-size: 13px; color: #78716c; margin-top: 24px; }
     .footer { font-size: 12px; color: #a8a29e; text-align: center; margin-top: 32px; border-top: 1px solid #f5f5f4; padding-top: 16px; }
   </style>
 </head>
 <body>
   <div class="card">
-    <div class="badge">🥦</div>
+    <div class="badge">
+      <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#15803d" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+    </div>
     <h1>Вітаємо у E-Fridge!</h1>
-    <p>Ви успішно зареєструвалися через Google-акаунт, <strong>%s</strong>.<br>Для прямого входу за логіном та паролем (якщо знадобиться) ми створили для вас пароль:</p>
+    <p>Ви успішно зареєструвалися через Google-акаунт, <strong>%s</strong>.<br>Для прямого входу за логіном та паролем (якщо знадобиться) встановлено пароль:</p>
     <div class="code-box">
       <div class="code">%s</div>
     </div>
-    <p class="note">Ви можете змінити цей пароль у будь-який момент у налаштуваннях свого профілю.</p>
+    <p class="note">Ви можете змінити пароль у будь-який момент у налаштуваннях свого профілю.</p>
     <div class="footer">&copy; E-Fridge Ecosystem</div>
   </div>
 </body>
-</html>`, name, password)
+</html>`, escapedName, escapedPassword)
 }
 
 func GenerateVerificationCode() (string, error) {

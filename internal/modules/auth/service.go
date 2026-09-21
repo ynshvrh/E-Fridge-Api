@@ -6,13 +6,16 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/ynshvrh/E-Fridge-Api/internal/config"
+	"github.com/ynshvrh/E-Fridge-Api/internal/database"
 	"github.com/ynshvrh/E-Fridge-Api/internal/db"
 	"github.com/ynshvrh/E-Fridge-Api/internal/pkg/crypto"
 	"github.com/ynshvrh/E-Fridge-Api/internal/pkg/jwt"
@@ -31,18 +34,37 @@ var (
 
 type Service struct {
 	queries         *db.Queries
+	pool            *pgxpool.Pool
 	cfg             *config.Config
 	mailer          Mailer
 	resendCooldowns map[string]time.Time
-	resendMu        sync.Mutex
+	resendMu        sync.RWMutex
 }
 
-func NewService(queries *db.Queries, cfg *config.Config) *Service {
+func NewService(queries *db.Queries, cfg *config.Config, pool ...*pgxpool.Pool) *Service {
+	var p *pgxpool.Pool
+	if len(pool) > 0 {
+		p = pool[0]
+	}
 	return &Service{
 		queries:         queries,
+		pool:            p,
 		cfg:             cfg,
 		mailer:          NewMailer(cfg),
 		resendCooldowns: make(map[string]time.Time),
+	}
+}
+
+func (s *Service) SetPool(pool *pgxpool.Pool) {
+	s.pool = pool
+}
+
+func (s *Service) cleanExpiredCooldownsLocked() {
+	now := time.Now()
+	for email, sentAt := range s.resendCooldowns {
+		if now.Sub(sentAt) > 15*time.Minute {
+			delete(s.resendCooldowns, email)
+		}
 	}
 }
 
@@ -123,6 +145,7 @@ func (s *Service) Register(ctx context.Context, email, name, password string) (*
 
 	// Rate limit / cooldown per email (60s)
 	s.resendMu.Lock()
+	s.cleanExpiredCooldownsLocked()
 	if lastSent, exists := s.resendCooldowns[email]; exists {
 		if elapsed := time.Since(lastSent); elapsed < 60*time.Second {
 			remaining := int((60*time.Second - elapsed).Seconds()) + 1
@@ -143,7 +166,7 @@ func (s *Service) Register(ctx context.Context, email, name, password string) (*
 		return nil, fmt.Errorf("failed to generate verification code: %w", err)
 	}
 
-	expiresAt := time.Now().Add(48 * time.Hour)
+	expiresAt := time.Now().Add(15 * time.Minute)
 
 	_, err = s.queries.CreateOrUpdatePendingRegistration(ctx, db.CreateOrUpdatePendingRegistrationParams{
 		Email:            email,
@@ -151,6 +174,7 @@ func (s *Service) Register(ctx context.Context, email, name, password string) (*
 		PasswordHash:     hashedPassword,
 		VerificationCode: code,
 		ExpiresAt:        expiresAt,
+		AttemptsLeft:     5,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to save pending registration: %w", err)
@@ -191,10 +215,19 @@ func (s *Service) ConfirmRegistration(ctx context.Context, email, code string) (
 	}
 
 	if time.Now().After(pending.ExpiresAt) {
-		return nil, ErrInvalidVerificationCode
+		_ = s.queries.DeletePendingRegistration(ctx, email)
+		return nil, fmt.Errorf("%w: термін дії коду вичерпано. Будь ласка, зареєструйтесь знову", ErrInvalidVerificationCode)
 	}
 
 	if pending.VerificationCode != code {
+		attemptsLeft, decrErr := s.queries.DecrementPendingRegistrationAttempts(ctx, email)
+		if decrErr == nil && attemptsLeft <= 0 {
+			_ = s.queries.DeletePendingRegistration(ctx, email)
+			return nil, fmt.Errorf("%w: ліміт спроб вичерпано. Будь ласка, зареєструйтесь знову", ErrInvalidVerificationCode)
+		}
+		if decrErr == nil {
+			return nil, fmt.Errorf("%w: невірний код підтвердження. Залишилось спроб: %d", ErrInvalidVerificationCode, attemptsLeft)
+		}
 		return nil, ErrInvalidVerificationCode
 	}
 
@@ -207,40 +240,78 @@ func (s *Service) ConfirmRegistration(ctx context.Context, email, code string) (
 		return nil, fmt.Errorf("failed to verify existing user: %w", err)
 	}
 
-	// Create user
-	createdUser, err := s.queries.CreateUser(ctx, db.CreateUserParams{
-		Email:        pending.Email,
-		Name:         pending.Name,
-		PasswordHash: pending.PasswordHash,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to create user: %w", err)
+	var createdUser db.CreateUserRow
+	var defaultFridge db.Fridge
+
+	if s.pool != nil {
+		err = database.WithTransaction(ctx, s.pool, func(qtx *db.Queries) error {
+			var txErr error
+			createdUser, txErr = qtx.CreateUser(ctx, db.CreateUserParams{
+				Email:        pending.Email,
+				Name:         pending.Name,
+				PasswordHash: pending.PasswordHash,
+			})
+			if txErr != nil {
+				return fmt.Errorf("failed to create user: %w", txErr)
+			}
+
+			_ = qtx.DeletePendingRegistration(ctx, email)
+
+			defaultFridge, txErr = qtx.CreateFridge(ctx, db.CreateFridgeParams{
+				Name:    "Мій холодильник",
+				OwnerID: createdUser.ID,
+			})
+			if txErr != nil {
+				return fmt.Errorf("failed to create default fridge: %w", txErr)
+			}
+
+			_, txErr = qtx.AddFridgeMember(ctx, db.AddFridgeMemberParams{
+				FridgeID: defaultFridge.ID,
+				UserID:   createdUser.ID,
+				Role:     "owner",
+			})
+			if txErr != nil {
+				return fmt.Errorf("failed to add user to fridge: %w", txErr)
+			}
+			return nil
+		})
+		if err != nil {
+			return nil, fmt.Errorf("failed to complete registration transaction: %w", err)
+		}
+	} else {
+		// Non-pool fallback (e.g. for mock queries in unit tests)
+		createdUser, err = s.queries.CreateUser(ctx, db.CreateUserParams{
+			Email:        pending.Email,
+			Name:         pending.Name,
+			PasswordHash: pending.PasswordHash,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("failed to create user: %w", err)
+		}
+
+		_ = s.queries.DeletePendingRegistration(ctx, email)
+
+		defaultFridge, err = s.queries.CreateFridge(ctx, db.CreateFridgeParams{
+			Name:    "Мій холодильник",
+			OwnerID: createdUser.ID,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("failed to create default fridge: %w", err)
+		}
+
+		_, err = s.queries.AddFridgeMember(ctx, db.AddFridgeMemberParams{
+			FridgeID: defaultFridge.ID,
+			UserID:   createdUser.ID,
+			Role:     "owner",
+		})
+		if err != nil {
+			return nil, fmt.Errorf("failed to add user to fridge: %w", err)
+		}
 	}
 
-	// Delete pending registration
-	_ = s.queries.DeletePendingRegistration(ctx, email)
 	s.resendMu.Lock()
 	delete(s.resendCooldowns, email)
 	s.resendMu.Unlock()
-
-	// Create default fridge
-	defaultFridge, err := s.queries.CreateFridge(ctx, db.CreateFridgeParams{
-		Name:    "Мій холодильник",
-		OwnerID: createdUser.ID,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to create default fridge: %w", err)
-	}
-
-	// Add member as owner
-	_, err = s.queries.AddFridgeMember(ctx, db.AddFridgeMemberParams{
-		FridgeID: defaultFridge.ID,
-		UserID:   createdUser.ID,
-		Role:     "owner",
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to add user to fridge: %w", err)
-	}
 
 	// Tokens
 	accessToken, err := jwt.GenerateAccessToken(s.cfg.JWTSecret, s.cfg.AccessTokenTTL, createdUser.ID, createdUser.Email, createdUser.Name)
@@ -303,6 +374,7 @@ func (s *Service) ResendVerificationCode(ctx context.Context, email string) (*Re
 
 	// Rate limit / cooldown per email (60s)
 	s.resendMu.Lock()
+	s.cleanExpiredCooldownsLocked()
 	if lastSent, exists := s.resendCooldowns[email]; exists {
 		if elapsed := time.Since(lastSent); elapsed < 60*time.Second {
 			remaining := int((60*time.Second - elapsed).Seconds()) + 1
@@ -318,11 +390,12 @@ func (s *Service) ResendVerificationCode(ctx context.Context, email string) (*Re
 		return nil, fmt.Errorf("failed to generate verification code: %w", err)
 	}
 
-	expiresAt := time.Now().Add(48 * time.Hour)
+	expiresAt := time.Now().Add(15 * time.Minute)
 	err = s.queries.UpdatePendingRegistrationCode(ctx, db.UpdatePendingRegistrationCodeParams{
 		Email:            email,
 		VerificationCode: code,
 		ExpiresAt:        expiresAt,
+		AttemptsLeft:     5,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to update verification code: %w", err)
@@ -536,9 +609,9 @@ func (s *Service) UpdateProfile(ctx context.Context, userID uuid.UUID, input Upd
 }
 
 func (s *Service) DeleteAccount(ctx context.Context, userID uuid.UUID) error {
+	_ = s.queries.RevokeAllUserRefreshTokens(ctx, userID)
 	return s.queries.DeleteUser(ctx, userID)
 }
-
 
 func (s *Service) UpdatePassword(ctx context.Context, userID uuid.UUID, input UpdatePasswordInput) error {
 	if len(input.NewPassword) < 8 {
@@ -559,10 +632,15 @@ func (s *Service) UpdatePassword(ctx context.Context, userID uuid.UUID, input Up
 		return err
 	}
 
-	return s.queries.UpdateUserPassword(ctx, db.UpdateUserPasswordParams{
+	if err := s.queries.UpdateUserPassword(ctx, db.UpdateUserPasswordParams{
 		ID:           userID,
 		PasswordHash: newHash,
-	})
+	}); err != nil {
+		return err
+	}
+
+	_ = s.queries.RevokeAllUserRefreshTokens(ctx, userID)
+	return nil
 }
 
 type GoogleTokenInfo struct {
@@ -589,8 +667,8 @@ func (s *Service) SignInWithGoogle(ctx context.Context, idToken string) (*AuthRe
 		name = "Google User"
 	} else {
 		// Call Google tokeninfo endpoint
-		url := "https://oauth2.googleapis.com/tokeninfo?id_token=" + idToken
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		tokenURL := "https://oauth2.googleapis.com/tokeninfo?id_token=" + url.QueryEscape(idToken)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, tokenURL, nil)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create google verification request: %w", err)
 		}
@@ -651,33 +729,68 @@ func (s *Service) SignInWithGoogle(ctx context.Context, idToken string) (*AuthRe
 			return nil, fmt.Errorf("failed to hash password: %w", err)
 		}
 
-		createdUser, err := s.queries.CreateUser(ctx, db.CreateUserParams{
-			Email:        email,
-			Name:         name,
-			PasswordHash: hash,
-		})
-		if err != nil {
-			return nil, fmt.Errorf("failed to create user: %w", err)
-		}
-		userID = createdUser.ID
-		userName = createdUser.Name
+		if s.pool != nil {
+			err = database.WithTransaction(ctx, s.pool, func(qtx *db.Queries) error {
+				createdUser, txErr := qtx.CreateUser(ctx, db.CreateUserParams{
+					Email:        email,
+					Name:         name,
+					PasswordHash: hash,
+				})
+				if txErr != nil {
+					return fmt.Errorf("failed to create user: %w", txErr)
+				}
+				userID = createdUser.ID
+				userName = createdUser.Name
 
-		// Create default fridge
-		defaultFridge, err := s.queries.CreateFridge(ctx, db.CreateFridgeParams{
-			Name:    "Мій холодильник",
-			OwnerID: createdUser.ID,
-		})
-		if err != nil {
-			return nil, fmt.Errorf("failed to create default fridge: %w", err)
-		}
+				defaultFridge, txErr := qtx.CreateFridge(ctx, db.CreateFridgeParams{
+					Name:    "Мій холодильник",
+					OwnerID: createdUser.ID,
+				})
+				if txErr != nil {
+					return fmt.Errorf("failed to create default fridge: %w", txErr)
+				}
 
-		_, err = s.queries.AddFridgeMember(ctx, db.AddFridgeMemberParams{
-			FridgeID: defaultFridge.ID,
-			UserID:   createdUser.ID,
-			Role:     "owner",
-		})
-		if err != nil {
-			return nil, fmt.Errorf("failed to add member to fridge: %w", err)
+				_, txErr = qtx.AddFridgeMember(ctx, db.AddFridgeMemberParams{
+					FridgeID: defaultFridge.ID,
+					UserID:   createdUser.ID,
+					Role:     "owner",
+				})
+				if txErr != nil {
+					return fmt.Errorf("failed to add member to fridge: %w", txErr)
+				}
+				return nil
+			})
+			if err != nil {
+				return nil, fmt.Errorf("failed to create google user and fridge: %w", err)
+			}
+		} else {
+			createdUser, err := s.queries.CreateUser(ctx, db.CreateUserParams{
+				Email:        email,
+				Name:         name,
+				PasswordHash: hash,
+			})
+			if err != nil {
+				return nil, fmt.Errorf("failed to create user: %w", err)
+			}
+			userID = createdUser.ID
+			userName = createdUser.Name
+
+			defaultFridge, err := s.queries.CreateFridge(ctx, db.CreateFridgeParams{
+				Name:    "Мій холодильник",
+				OwnerID: createdUser.ID,
+			})
+			if err != nil {
+				return nil, fmt.Errorf("failed to create default fridge: %w", err)
+			}
+
+			_, err = s.queries.AddFridgeMember(ctx, db.AddFridgeMemberParams{
+				FridgeID: defaultFridge.ID,
+				UserID:   createdUser.ID,
+				Role:     "owner",
+			})
+			if err != nil {
+				return nil, fmt.Errorf("failed to add member to fridge: %w", err)
+			}
 		}
 
 		// Send email with generated password

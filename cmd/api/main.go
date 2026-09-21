@@ -53,7 +53,7 @@ func main() {
 	queries := db.New(dbConn.Pool)
 
 	// 4. Services & Handlers
-	authService := auth.NewService(queries, cfg)
+	authService := auth.NewService(queries, cfg, dbConn.Pool)
 	authHandler := auth.NewHandler(authService)
 
 	fridgeService := fridge.NewService(queries)

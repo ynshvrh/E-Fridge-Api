@@ -15,7 +15,7 @@ import (
 const addFridgeMember = `-- name: AddFridgeMember :one
 INSERT INTO fridge_members (fridge_id, user_id, role)
 VALUES ($1, $2, $3)
-ON CONFLICT (fridge_id, user_id) DO UPDATE SET role = EXCLUDED.role
+ON CONFLICT (fridge_id, user_id) DO NOTHING
 RETURNING fridge_id, user_id, role, joined_at
 `
 
@@ -72,15 +72,16 @@ func (q *Queries) CreateFridge(ctx context.Context, arg CreateFridgeParams) (Fri
 }
 
 const createOrUpdatePendingRegistration = `-- name: CreateOrUpdatePendingRegistration :one
-INSERT INTO pending_registrations (email, name, password_hash, verification_code, expires_at)
-VALUES ($1, $2, $3, $4, $5)
+INSERT INTO pending_registrations (email, name, password_hash, verification_code, expires_at, attempts_left)
+VALUES ($1, $2, $3, $4, $5, $6)
 ON CONFLICT (email) DO UPDATE SET
     name = EXCLUDED.name,
     password_hash = EXCLUDED.password_hash,
     verification_code = EXCLUDED.verification_code,
     expires_at = EXCLUDED.expires_at,
+    attempts_left = EXCLUDED.attempts_left,
     created_at = NOW()
-RETURNING id, email, name, password_hash, verification_code, expires_at, created_at
+RETURNING id, email, name, password_hash, verification_code, expires_at, attempts_left, created_at
 `
 
 type CreateOrUpdatePendingRegistrationParams struct {
@@ -89,17 +90,30 @@ type CreateOrUpdatePendingRegistrationParams struct {
 	PasswordHash     string
 	VerificationCode string
 	ExpiresAt        time.Time
+	AttemptsLeft     int32
 }
 
-func (q *Queries) CreateOrUpdatePendingRegistration(ctx context.Context, arg CreateOrUpdatePendingRegistrationParams) (PendingRegistration, error) {
+type CreateOrUpdatePendingRegistrationRow struct {
+	ID               uuid.UUID
+	Email            string
+	Name             string
+	PasswordHash     string
+	VerificationCode string
+	ExpiresAt        time.Time
+	AttemptsLeft     int32
+	CreatedAt        time.Time
+}
+
+func (q *Queries) CreateOrUpdatePendingRegistration(ctx context.Context, arg CreateOrUpdatePendingRegistrationParams) (CreateOrUpdatePendingRegistrationRow, error) {
 	row := q.db.QueryRow(ctx, createOrUpdatePendingRegistration,
 		arg.Email,
 		arg.Name,
 		arg.PasswordHash,
 		arg.VerificationCode,
 		arg.ExpiresAt,
+		arg.AttemptsLeft,
 	)
-	var i PendingRegistration
+	var i CreateOrUpdatePendingRegistrationRow
 	err := row.Scan(
 		&i.ID,
 		&i.Email,
@@ -107,6 +121,7 @@ func (q *Queries) CreateOrUpdatePendingRegistration(ctx context.Context, arg Cre
 		&i.PasswordHash,
 		&i.VerificationCode,
 		&i.ExpiresAt,
+		&i.AttemptsLeft,
 		&i.CreatedAt,
 	)
 	return i, err
@@ -171,6 +186,20 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (CreateU
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const decrementPendingRegistrationAttempts = `-- name: DecrementPendingRegistrationAttempts :one
+UPDATE pending_registrations
+SET attempts_left = attempts_left - 1
+WHERE email = $1
+RETURNING attempts_left
+`
+
+func (q *Queries) DecrementPendingRegistrationAttempts(ctx context.Context, email string) (int32, error) {
+	row := q.db.QueryRow(ctx, decrementPendingRegistrationAttempts, email)
+	var attempts_left int32
+	err := row.Scan(&attempts_left)
+	return attempts_left, err
 }
 
 const deleteFridge = `-- name: DeleteFridge :exec
@@ -332,14 +361,25 @@ func (q *Queries) GetFridgesByUserID(ctx context.Context, userID uuid.UUID) ([]G
 }
 
 const getPendingRegistrationByEmail = `-- name: GetPendingRegistrationByEmail :one
-SELECT id, email, name, password_hash, verification_code, expires_at, created_at
+SELECT id, email, name, password_hash, verification_code, expires_at, attempts_left, created_at
 FROM pending_registrations
 WHERE email = $1
 `
 
-func (q *Queries) GetPendingRegistrationByEmail(ctx context.Context, email string) (PendingRegistration, error) {
+type GetPendingRegistrationByEmailRow struct {
+	ID               uuid.UUID
+	Email            string
+	Name             string
+	PasswordHash     string
+	VerificationCode string
+	ExpiresAt        time.Time
+	AttemptsLeft     int32
+	CreatedAt        time.Time
+}
+
+func (q *Queries) GetPendingRegistrationByEmail(ctx context.Context, email string) (GetPendingRegistrationByEmailRow, error) {
 	row := q.db.QueryRow(ctx, getPendingRegistrationByEmail, email)
-	var i PendingRegistration
+	var i GetPendingRegistrationByEmailRow
 	err := row.Scan(
 		&i.ID,
 		&i.Email,
@@ -347,6 +387,7 @@ func (q *Queries) GetPendingRegistrationByEmail(ctx context.Context, email strin
 		&i.PasswordHash,
 		&i.VerificationCode,
 		&i.ExpiresAt,
+		&i.AttemptsLeft,
 		&i.CreatedAt,
 	)
 	return i, err
@@ -520,7 +561,7 @@ func (q *Queries) RevokeRefreshToken(ctx context.Context, tokenHash string) erro
 
 const updatePendingRegistrationCode = `-- name: UpdatePendingRegistrationCode :exec
 UPDATE pending_registrations
-SET verification_code = $2, expires_at = $3
+SET verification_code = $2, expires_at = $3, attempts_left = $4
 WHERE email = $1
 `
 
@@ -528,10 +569,16 @@ type UpdatePendingRegistrationCodeParams struct {
 	Email            string
 	VerificationCode string
 	ExpiresAt        time.Time
+	AttemptsLeft     int32
 }
 
 func (q *Queries) UpdatePendingRegistrationCode(ctx context.Context, arg UpdatePendingRegistrationCodeParams) error {
-	_, err := q.db.Exec(ctx, updatePendingRegistrationCode, arg.Email, arg.VerificationCode, arg.ExpiresAt)
+	_, err := q.db.Exec(ctx, updatePendingRegistrationCode,
+		arg.Email,
+		arg.VerificationCode,
+		arg.ExpiresAt,
+		arg.AttemptsLeft,
+	)
 	return err
 }
 

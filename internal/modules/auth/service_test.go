@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/ynshvrh/E-Fridge-Api/internal/config"
+	"github.com/ynshvrh/E-Fridge-Api/internal/database"
 	"github.com/ynshvrh/E-Fridge-Api/internal/db"
 	"github.com/ynshvrh/E-Fridge-Api/internal/pkg/crypto"
 	"github.com/ynshvrh/E-Fridge-Api/internal/pkg/jwt"
@@ -153,14 +154,14 @@ func TestRegistrationFullFlowWithDB(t *testing.T) {
 	ctx := context.Background()
 	dbURL := "postgres://postgres:postgrespassword@localhost:5432/e_fridge?sslmode=disable"
 
-	pool, err := pgx.Connect(ctx, dbURL)
+	dbConn, err := database.Connect(ctx, dbURL)
 	if err != nil {
 		t.Skip("skipping DB integration test, cannot connect to PostgreSQL")
 		return
 	}
-	defer pool.Close(ctx)
+	defer dbConn.Close()
 
-	queries := db.New(pool)
+	queries := db.New(dbConn.Pool)
 	cfg := &config.Config{
 		JWTSecret:       "test-secret-key-12345678901234567890",
 		AccessTokenTTL:  15 * time.Minute,
@@ -168,7 +169,7 @@ func TestRegistrationFullFlowWithDB(t *testing.T) {
 		Environment:     "test",
 	}
 
-	service := NewService(queries, cfg)
+	service := NewService(queries, cfg, dbConn.Pool)
 	mailer := &mockMailer{}
 	service.SetMailer(mailer)
 
@@ -269,21 +270,21 @@ func TestRegistrationFullFlowWithDB(t *testing.T) {
 	if len(authRes.Fridges) > 0 {
 		_ = queries.DeleteFridge(ctx, authRes.Fridges[0].ID)
 	}
-	_, _ = pool.Exec(ctx, "DELETE FROM users WHERE email = $1", testEmail)
+	_, _ = dbConn.Pool.Exec(ctx, "DELETE FROM users WHERE email = $1", testEmail)
 }
 
 func TestSignInWithGoogleNewUser(t *testing.T) {
 	ctx := context.Background()
 	dbURL := "postgres://postgres:postgrespassword@localhost:5432/e_fridge?sslmode=disable"
 
-	pool, err := pgx.Connect(ctx, dbURL)
+	dbConn, err := database.Connect(ctx, dbURL)
 	if err != nil {
 		t.Skip("skipping DB test, cannot connect to PostgreSQL")
 		return
 	}
-	defer pool.Close(ctx)
+	defer dbConn.Close()
 
-	queries := db.New(pool)
+	queries := db.New(dbConn.Pool)
 	cfg := &config.Config{
 		JWTSecret:       "test-secret-key-12345678901234567890",
 		AccessTokenTTL:  15 * time.Minute,
@@ -291,7 +292,7 @@ func TestSignInWithGoogleNewUser(t *testing.T) {
 		Environment:     "test",
 	}
 
-	service := NewService(queries, cfg)
+	service := NewService(queries, cfg, dbConn.Pool)
 	mailer := &mockMailer{}
 	service.SetMailer(mailer)
 
@@ -340,33 +341,33 @@ func TestSignInWithGoogleNewUser(t *testing.T) {
 	if len(authRes.Fridges) > 0 {
 		_ = queries.DeleteFridge(ctx, authRes.Fridges[0].ID)
 	}
-	_, _ = pool.Exec(ctx, "DELETE FROM users WHERE email = $1", googleEmail)
+	_, _ = dbConn.Pool.Exec(ctx, "DELETE FROM users WHERE email = $1", googleEmail)
 }
 
 func TestCleanExpiredPendingRegistrationsWithDB(t *testing.T) {
 	ctx := context.Background()
 	dbURL := "postgres://postgres:postgrespassword@localhost:5432/e_fridge?sslmode=disable"
-	pool, err := pgx.Connect(ctx, dbURL)
+	dbConn, err := database.Connect(ctx, dbURL)
 	if err != nil {
 		t.Skip("skipping DB integration test, cannot connect to PostgreSQL")
 		return
 	}
-	defer pool.Close(ctx)
+	defer dbConn.Close()
 
-	queries := db.New(pool)
+	queries := db.New(dbConn.Pool)
 	cfg := &config.Config{
 		JWTSecret:       "test-secret",
 		AccessTokenTTL:  15 * time.Minute,
 		RefreshTokenTTL: 7 * 24 * time.Hour,
 		Environment:     "test",
 	}
-	service := NewService(queries, cfg)
+	service := NewService(queries, cfg, dbConn.Pool)
 
 	expiredEmail := "expired_" + uuid.New().String()[:8] + "@example.com"
 	activeEmail := "active_" + uuid.New().String()[:8] + "@example.com"
 
 	// Insert an expired registration (expired 1 hour ago)
-	_, err = pool.Exec(ctx, `
+	_, err = dbConn.Pool.Exec(ctx, `
 		INSERT INTO pending_registrations (email, name, password_hash, verification_code, expires_at)
 		VALUES ($1, 'Expired User', 'dummyhash', '111111', NOW() - INTERVAL '1 hour')
 	`, expiredEmail)
@@ -375,7 +376,7 @@ func TestCleanExpiredPendingRegistrationsWithDB(t *testing.T) {
 	}
 
 	// Insert an active registration (expires in 48 hours)
-	_, err = pool.Exec(ctx, `
+	_, err = dbConn.Pool.Exec(ctx, `
 		INSERT INTO pending_registrations (email, name, password_hash, verification_code, expires_at)
 		VALUES ($1, 'Active User', 'dummyhash', '222222', NOW() + INTERVAL '48 hours')
 	`, activeEmail)
@@ -411,21 +412,21 @@ func TestCleanExpiredPendingRegistrationsWithDB(t *testing.T) {
 func TestDeleteAccountWithDB(t *testing.T) {
 	ctx := context.Background()
 	dbURL := "postgres://postgres:postgrespassword@localhost:5432/e_fridge?sslmode=disable"
-	pool, err := pgx.Connect(ctx, dbURL)
+	dbConn, err := database.Connect(ctx, dbURL)
 	if err != nil {
 		t.Skip("skipping DB integration test, cannot connect to PostgreSQL")
 		return
 	}
-	defer pool.Close(ctx)
+	defer dbConn.Close()
 
-	queries := db.New(pool)
+	queries := db.New(dbConn.Pool)
 	cfg := &config.Config{
 		JWTSecret:       "test-secret",
 		AccessTokenTTL:  15 * time.Minute,
 		RefreshTokenTTL: 7 * 24 * time.Hour,
 		Environment:     "test",
 	}
-	service := NewService(queries, cfg)
+	service := NewService(queries, cfg, dbConn.Pool)
 
 	testEmail := "delete_test_" + uuid.New().String()[:8] + "@example.com"
 	u, err := queries.CreateUser(ctx, db.CreateUserParams{
@@ -455,4 +456,132 @@ func TestDeleteAccountWithDB(t *testing.T) {
 		t.Errorf("expected ErrNoRows, got %v", err)
 	}
 }
+
+func TestVerificationAttemptsLockoutWithDB(t *testing.T) {
+	ctx := context.Background()
+	dbURL := "postgres://postgres:postgrespassword@localhost:5432/e_fridge?sslmode=disable"
+	dbConn, err := database.Connect(ctx, dbURL)
+	if err != nil {
+		t.Skip("skipping DB integration test, cannot connect to PostgreSQL")
+		return
+	}
+	defer dbConn.Close()
+
+	queries := db.New(dbConn.Pool)
+	cfg := &config.Config{
+		JWTSecret:       "test-secret",
+		AccessTokenTTL:  15 * time.Minute,
+		RefreshTokenTTL: 7 * 24 * time.Hour,
+		Environment:     "test",
+	}
+	service := NewService(queries, cfg, dbConn.Pool)
+	mailer := &mockMailer{}
+	service.SetMailer(mailer)
+
+	testEmail := "lockout_test_" + uuid.New().String()[:8] + "@example.com"
+	_, err = service.Register(ctx, testEmail, "Lockout Tester", "SecretPass123!")
+	if err != nil {
+		t.Fatalf("Register failed: %v", err)
+	}
+
+	// 4 wrong attempts
+	for i := 1; i <= 4; i++ {
+		_, err = service.ConfirmRegistration(ctx, testEmail, "999999")
+		if err == nil {
+			t.Fatalf("expected error on wrong code attempt %d", i)
+		}
+	}
+
+	// 5th wrong attempt should exhaust attempts and delete pending registration
+	_, err = service.ConfirmRegistration(ctx, testEmail, "999999")
+	if err == nil {
+		t.Fatalf("expected error on 5th wrong attempt")
+	}
+
+	// Pending registration should now be completely deleted
+	_, err = queries.GetPendingRegistrationByEmail(ctx, testEmail)
+	if !errors.Is(err, pgx.ErrNoRows) {
+		t.Errorf("expected pending registration to be deleted after 5 attempts, got: %v", err)
+	}
+}
+
+func TestPasswordUpdateRevokesRefreshTokensWithDB(t *testing.T) {
+	ctx := context.Background()
+	dbURL := "postgres://postgres:postgrespassword@localhost:5432/e_fridge?sslmode=disable"
+	dbConn, err := database.Connect(ctx, dbURL)
+	if err != nil {
+		t.Skip("skipping DB integration test, cannot connect to PostgreSQL")
+		return
+	}
+	defer dbConn.Close()
+
+	queries := db.New(dbConn.Pool)
+	cfg := &config.Config{
+		JWTSecret:       "test-secret",
+		AccessTokenTTL:  15 * time.Minute,
+		RefreshTokenTTL: 7 * 24 * time.Hour,
+		Environment:     "test",
+	}
+	service := NewService(queries, cfg, dbConn.Pool)
+
+	testEmail := "pwd_test_" + uuid.New().String()[:8] + "@example.com"
+	oldPassword := "OldPassword123!"
+	newPassword := "NewPassword456!"
+
+	hash, _ := crypto.HashPassword(oldPassword)
+	u, err := queries.CreateUser(ctx, db.CreateUserParams{
+		Email:        testEmail,
+		Name:         "Pwd Tester",
+		PasswordHash: hash,
+	})
+	if err != nil {
+		t.Fatalf("failed to create user: %v", err)
+	}
+	defer func() {
+		_, _ = dbConn.Pool.Exec(ctx, "DELETE FROM users WHERE email = $1", testEmail)
+	}()
+
+	// Create a refresh token
+	rawToken := "sample-refresh-token-123456789012"
+	tokenHash := crypto.HashToken(rawToken)
+	_, err = queries.CreateRefreshToken(ctx, db.CreateRefreshTokenParams{
+		UserID:    u.ID,
+		TokenHash: tokenHash,
+		ExpiresAt: time.Now().Add(24 * time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("failed to create refresh token: %v", err)
+	}
+
+	// Verify token is valid
+	_, err = queries.GetValidRefreshTokenByHash(ctx, tokenHash)
+	if err != nil {
+		t.Fatalf("refresh token should be valid initially: %v", err)
+	}
+
+	// Update password
+	err = service.UpdatePassword(ctx, u.ID, UpdatePasswordInput{
+		OldPassword: oldPassword,
+		NewPassword: newPassword,
+	})
+	if err != nil {
+		t.Fatalf("UpdatePassword failed: %v", err)
+	}
+
+	// Refresh token should now be revoked
+	_, err = queries.GetValidRefreshTokenByHash(ctx, tokenHash)
+	if !errors.Is(err, pgx.ErrNoRows) {
+		t.Errorf("expected refresh token to be revoked after password change, got %v", err)
+	}
+
+	// User should be able to log in with new password
+	loginRes, err := service.Login(ctx, testEmail, newPassword)
+	if err != nil {
+		t.Fatalf("login with new password failed: %v", err)
+	}
+	if loginRes.User.Email != testEmail {
+		t.Errorf("expected email %s, got %s", testEmail, loginRes.User.Email)
+	}
+}
+
 
