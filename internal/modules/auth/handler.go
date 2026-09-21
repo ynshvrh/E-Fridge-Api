@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 	"time"
+	"unicode"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/ynshvrh/E-Fridge-Api/internal/middleware"
@@ -171,7 +173,15 @@ func (h *Handler) ConfirmRegistration(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if errors.Is(err, ErrInvalidVerificationCode) {
-			response.Error(w, http.StatusBadRequest, "Невірний або прострочений код підтвердження", "INVALID_CODE")
+			msg := strings.TrimPrefix(err.Error(), ErrInvalidVerificationCode.Error()+": ")
+			if msg == "" || msg == ErrInvalidVerificationCode.Error() {
+				msg = "Невірний або прострочений код підтвердження"
+			} else {
+				runes := []rune(msg)
+				runes[0] = unicode.ToUpper(runes[0])
+				msg = string(runes)
+			}
+			response.Error(w, http.StatusBadRequest, msg, "INVALID_CODE")
 			return
 		}
 		if errors.Is(err, ErrEmailAlreadyExists) {
