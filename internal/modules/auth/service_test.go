@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"errors"
+	"os"
 	"testing"
 	"time"
 
@@ -14,6 +15,13 @@ import (
 	"github.com/ynshvrh/E-Fridge-Api/internal/pkg/crypto"
 	"github.com/ynshvrh/E-Fridge-Api/internal/pkg/jwt"
 )
+
+func getTestDBURL() string {
+	if url := os.Getenv("DATABASE_URL"); url != "" {
+		return url
+	}
+	return "postgres://postgres:postgrespassword@localhost:5432/e_fridge?sslmode=disable"
+}
 
 func TestPasswordHashing(t *testing.T) {
 	password := "SecretPass123!"
@@ -152,7 +160,7 @@ func (m *mockMailer) SendGoogleWelcomeEmail(ctx context.Context, toEmail, name, 
 
 func TestRegistrationFullFlowWithDB(t *testing.T) {
 	ctx := context.Background()
-	dbURL := "postgres://postgres:postgrespassword@localhost:5432/e_fridge?sslmode=disable"
+	dbURL := getTestDBURL()
 
 	dbConn, err := database.Connect(ctx, dbURL)
 	if err != nil {
@@ -275,7 +283,7 @@ func TestRegistrationFullFlowWithDB(t *testing.T) {
 
 func TestSignInWithGoogleNewUser(t *testing.T) {
 	ctx := context.Background()
-	dbURL := "postgres://postgres:postgrespassword@localhost:5432/e_fridge?sslmode=disable"
+	dbURL := getTestDBURL()
 
 	dbConn, err := database.Connect(ctx, dbURL)
 	if err != nil {
@@ -346,7 +354,7 @@ func TestSignInWithGoogleNewUser(t *testing.T) {
 
 func TestCleanExpiredPendingRegistrationsWithDB(t *testing.T) {
 	ctx := context.Background()
-	dbURL := "postgres://postgres:postgrespassword@localhost:5432/e_fridge?sslmode=disable"
+	dbURL := getTestDBURL()
 	dbConn, err := database.Connect(ctx, dbURL)
 	if err != nil {
 		t.Skip("skipping DB integration test, cannot connect to PostgreSQL")
@@ -411,7 +419,7 @@ func TestCleanExpiredPendingRegistrationsWithDB(t *testing.T) {
 
 func TestDeleteAccountWithDB(t *testing.T) {
 	ctx := context.Background()
-	dbURL := "postgres://postgres:postgrespassword@localhost:5432/e_fridge?sslmode=disable"
+	dbURL := getTestDBURL()
 	dbConn, err := database.Connect(ctx, dbURL)
 	if err != nil {
 		t.Skip("skipping DB integration test, cannot connect to PostgreSQL")
@@ -459,7 +467,7 @@ func TestDeleteAccountWithDB(t *testing.T) {
 
 func TestVerificationAttemptsLockoutWithDB(t *testing.T) {
 	ctx := context.Background()
-	dbURL := "postgres://postgres:postgrespassword@localhost:5432/e_fridge?sslmode=disable"
+	dbURL := getTestDBURL()
 	dbConn, err := database.Connect(ctx, dbURL)
 	if err != nil {
 		t.Skip("skipping DB integration test, cannot connect to PostgreSQL")
@@ -507,7 +515,7 @@ func TestVerificationAttemptsLockoutWithDB(t *testing.T) {
 
 func TestPasswordUpdateRevokesRefreshTokensWithDB(t *testing.T) {
 	ctx := context.Background()
-	dbURL := "postgres://postgres:postgrespassword@localhost:5432/e_fridge?sslmode=disable"
+	dbURL := getTestDBURL()
 	dbConn, err := database.Connect(ctx, dbURL)
 	if err != nil {
 		t.Skip("skipping DB integration test, cannot connect to PostgreSQL")
