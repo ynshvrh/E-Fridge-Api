@@ -7,6 +7,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/ynshvrh/E-Fridge-Api/internal/db"
 	"github.com/ynshvrh/E-Fridge-Api/internal/middleware"
 	"github.com/ynshvrh/E-Fridge-Api/internal/pkg/response"
 )
@@ -19,10 +20,11 @@ func NewHandler(service *Service) *Handler {
 	return &Handler{service: service}
 }
 
-func (h *Handler) Routes(jwtSecret string) chi.Router {
+func (h *Handler) Routes(jwtSecret string, queries *db.Queries) chi.Router {
 	r := chi.NewRouter()
 
 	r.Use(middleware.Auth(jwtSecret))
+	r.Use(middleware.RequireFridge(queries))
 
 	r.Get("/", h.List)
 	r.Post("/", h.Create)
@@ -33,13 +35,18 @@ func (h *Handler) Routes(jwtSecret string) chi.Router {
 }
 
 func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
+	fridgeID, ok := middleware.GetFridgeID(r.Context())
+	if !ok {
+		response.Error(w, http.StatusBadRequest, "Missing fridge context", "BAD_REQUEST")
+		return
+	}
 	userID, ok := middleware.GetUserID(r.Context())
 	if !ok {
 		response.Error(w, http.StatusUnauthorized, "Unauthorized", "UNAUTHORIZED")
 		return
 	}
 
-	recipes, err := h.service.ListRecipes(r.Context(), userID)
+	recipes, err := h.service.ListRecipes(r.Context(), fridgeID, userID)
 	if err != nil {
 		response.Error(w, http.StatusInternalServerError, err.Error(), "INTERNAL_ERROR")
 		return
@@ -49,6 +56,11 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
+	fridgeID, ok := middleware.GetFridgeID(r.Context())
+	if !ok {
+		response.Error(w, http.StatusBadRequest, "Missing fridge context", "BAD_REQUEST")
+		return
+	}
 	userID, ok := middleware.GetUserID(r.Context())
 	if !ok {
 		response.Error(w, http.StatusUnauthorized, "Unauthorized", "UNAUTHORIZED")
@@ -62,7 +74,7 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	recipe, err := h.service.GetRecipe(r.Context(), userID, recipeID)
+	recipe, err := h.service.GetRecipe(r.Context(), fridgeID, userID, recipeID)
 	if err != nil {
 		if errors.Is(err, ErrRecipeNotFound) {
 			response.Error(w, http.StatusNotFound, "Recipe not found", "NOT_FOUND")
@@ -76,15 +88,15 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
+	fridgeID, ok := middleware.GetFridgeID(r.Context())
+	if !ok {
+		response.Error(w, http.StatusBadRequest, "Missing fridge context", "BAD_REQUEST")
+		return
+	}
 	userID, ok := middleware.GetUserID(r.Context())
 	if !ok {
 		response.Error(w, http.StatusUnauthorized, "Unauthorized", "UNAUTHORIZED")
 		return
-	}
-
-	var fridgeIDPtr *uuid.UUID
-	if fid, ok := middleware.GetFridgeID(r.Context()); ok {
-		fridgeIDPtr = &fid
 	}
 
 	var input CreateRecipeInput
@@ -93,7 +105,7 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	recipe, err := h.service.CreateRecipe(r.Context(), userID, fridgeIDPtr, input)
+	recipe, err := h.service.CreateRecipe(r.Context(), fridgeID, userID, input)
 	if err != nil {
 		if errors.Is(err, ErrEmptyTitle) {
 			response.Error(w, http.StatusBadRequest, err.Error(), "VALIDATION_ERROR")
@@ -107,6 +119,11 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
+	fridgeID, ok := middleware.GetFridgeID(r.Context())
+	if !ok {
+		response.Error(w, http.StatusBadRequest, "Missing fridge context", "BAD_REQUEST")
+		return
+	}
 	userID, ok := middleware.GetUserID(r.Context())
 	if !ok {
 		response.Error(w, http.StatusUnauthorized, "Unauthorized", "UNAUTHORIZED")
@@ -120,7 +137,7 @@ func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.service.DeleteRecipe(r.Context(), userID, recipeID); err != nil {
+	if err := h.service.DeleteRecipe(r.Context(), fridgeID, userID, recipeID); err != nil {
 		response.Error(w, http.StatusInternalServerError, err.Error(), "INTERNAL_ERROR")
 		return
 	}

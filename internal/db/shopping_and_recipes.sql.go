@@ -142,16 +142,17 @@ func (q *Queries) DeleteBoughtShoppingItems(ctx context.Context, fridgeID uuid.U
 
 const deleteSavedRecipe = `-- name: DeleteSavedRecipe :exec
 DELETE FROM saved_recipes
-WHERE id = $1 AND user_id = $2
+WHERE id = $1 AND (fridge_id = $2 OR (fridge_id IS NULL AND user_id = $3))
 `
 
 type DeleteSavedRecipeParams struct {
-	ID     uuid.UUID
-	UserID uuid.UUID
+	ID       uuid.UUID
+	FridgeID pgtype.UUID
+	UserID   uuid.UUID
 }
 
 func (q *Queries) DeleteSavedRecipe(ctx context.Context, arg DeleteSavedRecipeParams) error {
-	_, err := q.db.Exec(ctx, deleteSavedRecipe, arg.ID, arg.UserID)
+	_, err := q.db.Exec(ctx, deleteSavedRecipe, arg.ID, arg.FridgeID, arg.UserID)
 	return err
 }
 
@@ -172,16 +173,17 @@ func (q *Queries) DeleteShoppingItem(ctx context.Context, arg DeleteShoppingItem
 
 const getSavedRecipeByID = `-- name: GetSavedRecipeByID :one
 SELECT id, user_id, fridge_id, title, description, ingredients, steps, calories, protein, fat, carbs, prep_time_mins, cook_time_mins, servings, created_at FROM saved_recipes
-WHERE id = $1 AND user_id = $2
+WHERE id = $1 AND (fridge_id = $2 OR (fridge_id IS NULL AND user_id = $3))
 `
 
 type GetSavedRecipeByIDParams struct {
-	ID     uuid.UUID
-	UserID uuid.UUID
+	ID       uuid.UUID
+	FridgeID pgtype.UUID
+	UserID   uuid.UUID
 }
 
 func (q *Queries) GetSavedRecipeByID(ctx context.Context, arg GetSavedRecipeByIDParams) (SavedRecipe, error) {
-	row := q.db.QueryRow(ctx, getSavedRecipeByID, arg.ID, arg.UserID)
+	row := q.db.QueryRow(ctx, getSavedRecipeByID, arg.ID, arg.FridgeID, arg.UserID)
 	var i SavedRecipe
 	err := row.Scan(
 		&i.ID,
@@ -231,14 +233,19 @@ func (q *Queries) GetShoppingItemByID(ctx context.Context, arg GetShoppingItemBy
 	return i, err
 }
 
-const listSavedRecipesByUser = `-- name: ListSavedRecipesByUser :many
+const listSavedRecipesByFridge = `-- name: ListSavedRecipesByFridge :many
 SELECT id, user_id, fridge_id, title, description, ingredients, steps, calories, protein, fat, carbs, prep_time_mins, cook_time_mins, servings, created_at FROM saved_recipes
-WHERE user_id = $1
+WHERE fridge_id = $1 OR (fridge_id IS NULL AND user_id = $2)
 ORDER BY created_at DESC
 `
 
-func (q *Queries) ListSavedRecipesByUser(ctx context.Context, userID uuid.UUID) ([]SavedRecipe, error) {
-	rows, err := q.db.Query(ctx, listSavedRecipesByUser, userID)
+type ListSavedRecipesByFridgeParams struct {
+	FridgeID pgtype.UUID
+	UserID   uuid.UUID
+}
+
+func (q *Queries) ListSavedRecipesByFridge(ctx context.Context, arg ListSavedRecipesByFridgeParams) ([]SavedRecipe, error) {
+	rows, err := q.db.Query(ctx, listSavedRecipesByFridge, arg.FridgeID, arg.UserID)
 	if err != nil {
 		return nil, err
 	}

@@ -66,8 +66,11 @@ func NewService(queries *db.Queries) *Service {
 	return &Service{queries: queries}
 }
 
-func (s *Service) ListRecipes(ctx context.Context, userID uuid.UUID) ([]SavedRecipeDTO, error) {
-	rows, err := s.queries.ListSavedRecipesByUser(ctx, userID)
+func (s *Service) ListRecipes(ctx context.Context, fridgeID, userID uuid.UUID) ([]SavedRecipeDTO, error) {
+	rows, err := s.queries.ListSavedRecipesByFridge(ctx, db.ListSavedRecipesByFridgeParams{
+		FridgeID: pgtype.UUID{Bytes: fridgeID, Valid: true},
+		UserID:   userID,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to list saved recipes: %w", err)
 	}
@@ -84,10 +87,11 @@ func (s *Service) ListRecipes(ctx context.Context, userID uuid.UUID) ([]SavedRec
 	return result, nil
 }
 
-func (s *Service) GetRecipe(ctx context.Context, userID, recipeID uuid.UUID) (*SavedRecipeDTO, error) {
+func (s *Service) GetRecipe(ctx context.Context, fridgeID, userID, recipeID uuid.UUID) (*SavedRecipeDTO, error) {
 	row, err := s.queries.GetSavedRecipeByID(ctx, db.GetSavedRecipeByIDParams{
-		ID:     recipeID,
-		UserID: userID,
+		ID:       recipeID,
+		FridgeID: pgtype.UUID{Bytes: fridgeID, Valid: true},
+		UserID:   userID,
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -104,7 +108,7 @@ func (s *Service) GetRecipe(ctx context.Context, userID, recipeID uuid.UUID) (*S
 	return &dto, nil
 }
 
-func (s *Service) CreateRecipe(ctx context.Context, userID uuid.UUID, fridgeID *uuid.UUID, input CreateRecipeInput) (*SavedRecipeDTO, error) {
+func (s *Service) CreateRecipe(ctx context.Context, fridgeID, userID uuid.UUID, input CreateRecipeInput) (*SavedRecipeDTO, error) {
 	title := strings.TrimSpace(input.Title)
 	if title == "" {
 		return nil, ErrEmptyTitle
@@ -124,10 +128,7 @@ func (s *Service) CreateRecipe(ctx context.Context, userID uuid.UUID, fridgeID *
 		return nil, fmt.Errorf("failed to encode steps: %w", err)
 	}
 
-	var fid pgtype.UUID
-	if fridgeID != nil {
-		fid = pgtype.UUID{Bytes: *fridgeID, Valid: true}
-	}
+	fid := pgtype.UUID{Bytes: fridgeID, Valid: true}
 
 	row, err := s.queries.CreateSavedRecipe(ctx, db.CreateSavedRecipeParams{
 		UserID:       userID,
@@ -156,10 +157,11 @@ func (s *Service) CreateRecipe(ctx context.Context, userID uuid.UUID, fridgeID *
 	return &dto, nil
 }
 
-func (s *Service) DeleteRecipe(ctx context.Context, userID, recipeID uuid.UUID) error {
+func (s *Service) DeleteRecipe(ctx context.Context, fridgeID, userID, recipeID uuid.UUID) error {
 	err := s.queries.DeleteSavedRecipe(ctx, db.DeleteSavedRecipeParams{
-		ID:     recipeID,
-		UserID: userID,
+		ID:       recipeID,
+		FridgeID: pgtype.UUID{Bytes: fridgeID, Valid: true},
+		UserID:   userID,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to delete recipe: %w", err)

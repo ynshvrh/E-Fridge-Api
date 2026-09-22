@@ -56,13 +56,14 @@ RETURNING *;
 
 -- name: GetSavedRecipeByID :one
 SELECT * FROM saved_recipes
-WHERE id = $1 AND user_id = $2;
+WHERE id = $1 AND (fridge_id = $2 OR (fridge_id IS NULL AND user_id = $3));
 
--- name: ListSavedRecipesByUser :many
+-- name: ListSavedRecipesByFridge :many
 SELECT * FROM saved_recipes
-WHERE user_id = $1
+WHERE fridge_id = $1 OR (fridge_id IS NULL AND user_id = $2)
 ORDER BY created_at DESC;
 
 -- name: DeleteSavedRecipe :exec
 DELETE FROM saved_recipes
-WHERE id = $1 AND user_id = $2;
+WHERE id = $1 AND (fridge_id = $2 OR (fridge_id IS NULL AND user_id = $3));
+
