@@ -74,7 +74,7 @@ func main() {
 	chefService := chef.NewService(queries, cfg)
 	chefHandler := chef.NewHandler(chefService, aiGuard)
 
-	shoppingService := shopping.NewService(queries, productsService)
+	shoppingService := shopping.NewService(queries, dbConn.Pool, productsService)
 	shoppingHandler := shopping.NewHandler(shoppingService)
 
 	recipesService := recipes.NewService(queries)
@@ -150,7 +150,7 @@ func main() {
 		api.Mount("/cooking", cookingHandler.Routes(cfg.JWTSecret, queries))
 		api.Mount("/chef", chefHandler.Routes(cfg.JWTSecret, queries))
 		api.Mount("/shopping", shoppingHandler.Routes(cfg.JWTSecret, queries))
-		api.Mount("/recipes", recipesHandler.Routes(cfg.JWTSecret))
+		api.Mount("/recipes", recipesHandler.Routes(cfg.JWTSecret, queries))
 		api.Mount("/planner", plannerHandler.Routes(cfg.JWTSecret, queries))
 	})
 

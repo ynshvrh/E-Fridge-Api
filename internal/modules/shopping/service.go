@@ -9,9 +9,13 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/ynshvrh/E-Fridge-Api/internal/database"
 	"github.com/ynshvrh/E-Fridge-Api/internal/db"
 	"github.com/ynshvrh/E-Fridge-Api/internal/modules/nutrition"
 	"github.com/ynshvrh/E-Fridge-Api/internal/modules/products"
+	"github.com/ynshvrh/E-Fridge-Api/internal/pkg/units"
 )
 
 var (
@@ -63,12 +67,14 @@ type PurchaseItemInput struct {
 
 type Service struct {
 	queries         *db.Queries
+	pool            *pgxpool.Pool
 	productsService *products.Service
 }
 
-func NewService(queries *db.Queries, productsService *products.Service) *Service {
+func NewService(queries *db.Queries, pool *pgxpool.Pool, productsService *products.Service) *Service {
 	return &Service{
 		queries:         queries,
+		pool:            pool,
 		productsService: productsService,
 	}
 }
@@ -113,6 +119,40 @@ func (s *Service) CreateItem(ctx context.Context, fridgeID, userID uuid.UUID, in
 	unit := strings.TrimSpace(input.Unit)
 	if unit == "" {
 		unit = "шт"
+	}
+
+	// Auto-deduplication: check if an unbought shopping item with matching name exists in the fridge
+	existingItems, err := s.queries.ListShoppingItemsByFridge(ctx, fridgeID)
+	if err == nil {
+		for _, ex := range existingItems {
+			if !ex.IsBought && strings.EqualFold(strings.TrimSpace(ex.Name), name) {
+				// Same item name exists in shopping list! Merge quantities
+				qtyToAdd := input.Quantity
+				targetUnit := ex.Unit
+				if units.AreCompatible(unit, targetUnit) {
+					qtyToAdd = units.Convert(qtyToAdd, unit, targetUnit)
+				}
+				newQty := units.Round(ex.Quantity+qtyToAdd, 2)
+				updatedCat := ex.Category
+				if updatedCat == "other" && category != "other" {
+					updatedCat = category
+				}
+
+				updated, upErr := s.queries.UpdateShoppingItem(ctx, db.UpdateShoppingItemParams{
+					ID:       ex.ID,
+					FridgeID: fridgeID,
+					Name:     ex.Name,
+					Category: updatedCat,
+					Quantity: newQty,
+					Unit:     targetUnit,
+					IsBought: ex.IsBought,
+				})
+				if upErr == nil {
+					dto := toDTO(updated)
+					return &dto, nil
+				}
+			}
+		}
 	}
 
 	item, err := s.queries.CreateShoppingItem(ctx, db.CreateShoppingItemParams{
@@ -217,56 +257,141 @@ func (s *Service) ClearAllItems(ctx context.Context, fridgeID uuid.UUID) error {
 	return s.queries.ClearShoppingList(ctx, fridgeID)
 }
 
-// PurchaseAndMoveToFridge takes a shopping item, creates a corresponding product in the fridge, and deletes the shopping item.
+// PurchaseAndMoveToFridge takes a shopping item, creates or merges into a corresponding product in the fridge, and deletes the shopping item.
 func (s *Service) PurchaseAndMoveToFridge(ctx context.Context, fridgeID, userID, itemID uuid.UUID, input PurchaseItemInput) (*products.ProductDTO, error) {
-	item, err := s.queries.GetShoppingItemByID(ctx, db.GetShoppingItemByIDParams{
-		ID:       itemID,
-		FridgeID: fridgeID,
-	})
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, ErrItemNotFound
+	var resultProduct *products.ProductDTO
+
+	execFunc := func(q *db.Queries) error {
+		item, err := q.GetShoppingItemByID(ctx, db.GetShoppingItemByIDParams{
+			ID:       itemID,
+			FridgeID: fridgeID,
+		})
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrItemNotFound
+			}
+			return fmt.Errorf("failed to get shopping item: %w", err)
 		}
-		return nil, fmt.Errorf("failed to get shopping item: %w", err)
+
+		quantity := item.Quantity
+		if input.Quantity != nil && *input.Quantity > 0 {
+			quantity = *input.Quantity
+		}
+
+		unit := strings.TrimSpace(item.Unit)
+		if unit == "" {
+			unit = "шт"
+		}
+
+		// Auto-deduplication: check if product already exists in the fridge
+		fridgeProducts, err := q.ListProductsByFridge(ctx, fridgeID)
+		if err != nil {
+			return fmt.Errorf("failed to list products in fridge: %w", err)
+		}
+
+		candidate := findMatchingProduct(fridgeProducts, item.Name)
+		if candidate != nil && units.AreCompatible(unit, candidate.Unit) {
+			// Convert quantity to candidate's storage unit
+			convertedQty := units.Convert(quantity, unit, candidate.Unit)
+			newTotalQty := units.Round(candidate.Quantity+convertedQty, 2)
+			updated, updateErr := q.UpdateProductQuantity(ctx, db.UpdateProductQuantityParams{
+				ID:       candidate.ID,
+				FridgeID: fridgeID,
+				Quantity: newTotalQty,
+			})
+			if updateErr != nil {
+				return fmt.Errorf("failed to update product quantity: %w", updateErr)
+			}
+
+			// Delete from shopping list once transferred to fridge
+			_ = q.DeleteShoppingItem(ctx, db.DeleteShoppingItemParams{
+				ID:       itemID,
+				FridgeID: fridgeID,
+			})
+
+			dto := products.ToDTO(updated)
+			resultProduct = &dto
+			return nil
+		}
+
+		// No matching candidate or incompatible unit: create new product in fridge
+		expiryDays := input.ExpiryDays
+		if expiryDays <= 0 {
+			expiryDays = 7 // default 1 week
+		}
+		expiryDateStr := time.Now().AddDate(0, 0, expiryDays).Format("2006-01-02")
+		t, err := time.Parse("2006-01-02", expiryDateStr)
+		var expiry pgtype.Date
+		if err == nil {
+			expiry = pgtype.Date{Time: t, Valid: true}
+		}
+
+		cals, p, f, c := nutrition.CalculateEstimatedNutrition(item.Name, quantity, unit)
+
+		newProd, err := q.CreateProduct(ctx, db.CreateProductParams{
+			FridgeID:   fridgeID,
+			Name:       item.Name,
+			Category:   item.Category,
+			Quantity:   quantity,
+			Unit:       unit,
+			ExpiryDate: expiry,
+			Calories:   int32(cals),
+			Protein:    p,
+			Fat:        f,
+			Carbs:      c,
+			Notes:      "Куплено зі списку покупок",
+			CreatedBy:  pgtype.UUID{Bytes: userID, Valid: true},
+		})
+		if err != nil {
+			return fmt.Errorf("failed to create product in fridge: %w", err)
+		}
+
+		// Delete from shopping list once transferred to fridge
+		_ = q.DeleteShoppingItem(ctx, db.DeleteShoppingItemParams{
+			ID:       itemID,
+			FridgeID: fridgeID,
+		})
+
+		dto := products.ToDTO(newProd)
+		resultProduct = &dto
+		return nil
 	}
 
-	quantity := item.Quantity
-	if input.Quantity != nil && *input.Quantity > 0 {
-		quantity = *input.Quantity
+	if s.pool != nil {
+		if err := database.WithTransaction(ctx, s.pool, execFunc); err != nil {
+			return nil, err
+		}
+	} else {
+		if err := execFunc(s.queries); err != nil {
+			return nil, err
+		}
 	}
 
-	expiryDays := input.ExpiryDays
-	if expiryDays <= 0 {
-		expiryDays = 7 // default 1 week
-	}
-	expiryDateStr := time.Now().AddDate(0, 0, expiryDays).Format("2006-01-02")
+	return resultProduct, nil
+}
 
-	// Calculate default nutritional profile if available
-	cals, p, f, c := nutrition.CalculateEstimatedNutrition(item.Name, quantity, item.Unit)
-
-	prod, err := s.productsService.CreateProduct(ctx, fridgeID, userID, products.CreateProductInput{
-		Name:       item.Name,
-		Category:   item.Category,
-		Quantity:   quantity,
-		Unit:       item.Unit,
-		ExpiryDate: &expiryDateStr,
-		Calories:   int32(cals),
-		Protein:    p,
-		Fat:        f,
-		Carbs:      c,
-		Notes:      "Куплено зі списку покупок",
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to create product in fridge: %w", err)
+func findMatchingProduct(prods []db.Product, itemName string) *db.Product {
+	target := strings.ToLower(strings.TrimSpace(itemName))
+	if target == "" {
+		return nil
 	}
 
-	// Delete from shopping list once transferred to fridge
-	_ = s.queries.DeleteShoppingItem(ctx, db.DeleteShoppingItemParams{
-		ID:       itemID,
-		FridgeID: fridgeID,
-	})
+	// 1. Exact case-insensitive match
+	for i := range prods {
+		if strings.ToLower(strings.TrimSpace(prods[i].Name)) == target {
+			return &prods[i]
+		}
+	}
 
-	return prod, nil
+	// 2. Prefix or substring match (e.g. "Молоко" matches "Молоко 2.5%" or vice-versa)
+	for i := range prods {
+		pName := strings.ToLower(strings.TrimSpace(prods[i].Name))
+		if strings.HasPrefix(pName, target) || strings.HasPrefix(target, pName) {
+			return &prods[i]
+		}
+	}
+
+	return nil
 }
 
 func toDTO(item db.ShoppingItem) ShoppingItemDTO {

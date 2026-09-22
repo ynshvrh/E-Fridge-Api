@@ -436,6 +436,10 @@ func (s *Service) ClearFridge(ctx context.Context, fridgeID uuid.UUID) error {
 }
 
 func toDTO(p db.Product) ProductDTO {
+	return ToDTO(p)
+}
+
+func ToDTO(p db.Product) ProductDTO {
 	dto := ProductDTO{
 		ID:        p.ID,
 		FridgeID:  p.FridgeID,
