@@ -56,7 +56,7 @@ func main() {
 	authService := auth.NewService(queries, cfg, dbConn.Pool)
 	authHandler := auth.NewHandler(authService)
 
-	fridgeService := fridge.NewService(queries)
+	fridgeService := fridge.NewService(queries, dbConn.Pool)
 	fridgeHandler := fridge.NewHandler(fridgeService)
 
 	productsService := products.NewService(queries, cfg)
@@ -158,9 +158,9 @@ func main() {
 	server := &http.Server{
 		Addr:         ":" + cfg.Port,
 		Handler:      r,
-		ReadTimeout:  15 * time.Second,
-		WriteTimeout: 15 * time.Second,
-		IdleTimeout:  60 * time.Second,
+		ReadTimeout:  60 * time.Second,
+		WriteTimeout: 60 * time.Second,
+		IdleTimeout:  120 * time.Second,
 	}
 
 	// Graceful shutdown channel

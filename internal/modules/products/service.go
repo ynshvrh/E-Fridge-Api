@@ -62,7 +62,7 @@ type ProductDTO struct {
 	Fat        float64    `json:"fat"`
 	Carbs      float64    `json:"carbs"`
 	Notes      string     `json:"notes"`
-	CreatedBy  uuid.UUID  `json:"created_by"`
+	CreatedBy  *uuid.UUID `json:"created_by,omitempty"`
 	CreatedAt  time.Time  `json:"created_at"`
 	UpdatedAt  time.Time  `json:"updated_at"`
 }
@@ -179,7 +179,7 @@ func (s *Service) CreateProduct(ctx context.Context, fridgeID, userID uuid.UUID,
 		Fat:        input.Fat,
 		Carbs:      input.Carbs,
 		Notes:      input.Notes,
-		CreatedBy:  userID,
+		CreatedBy:  pgtype.UUID{Bytes: userID, Valid: true},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create product: %w", err)
@@ -444,10 +444,14 @@ func toDTO(p db.Product) ProductDTO {
 		Fat:       p.Fat,
 		Carbs:     p.Carbs,
 		Notes:     p.Notes,
-		CreatedBy: p.CreatedBy,
 		CreatedAt: p.CreatedAt,
 		UpdatedAt: p.UpdatedAt,
 		Status:    "good",
+	}
+
+	if p.CreatedBy.Valid {
+		uid := uuid.UUID(p.CreatedBy.Bytes)
+		dto.CreatedBy = &uid
 	}
 
 	if p.ExpiryDate.Valid {

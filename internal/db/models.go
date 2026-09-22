@@ -30,6 +30,15 @@ type Fridge struct {
 	UpdatedAt time.Time
 }
 
+type FridgeInvite struct {
+	ID        uuid.UUID
+	FridgeID  uuid.UUID
+	Token     string
+	CreatedBy pgtype.UUID
+	ExpiresAt time.Time
+	CreatedAt time.Time
+}
+
 type FridgeMember struct {
 	FridgeID uuid.UUID
 	UserID   uuid.UUID
@@ -97,7 +106,7 @@ type Product struct {
 	Fat        float64
 	Carbs      float64
 	Notes      string
-	CreatedBy  uuid.UUID
+	CreatedBy  pgtype.UUID
 	CreatedAt  time.Time
 	UpdatedAt  time.Time
 }

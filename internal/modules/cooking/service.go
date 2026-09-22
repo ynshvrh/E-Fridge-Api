@@ -168,7 +168,7 @@ func (s *Service) CookRecipe(ctx context.Context, fridgeID, userID uuid.UUID, in
 		Fat:        perServingFat,
 		Carbs:      perServingCarbs,
 		Notes:      "Свіжоприготована страва",
-		CreatedBy:  userID,
+		CreatedBy:  pgtype.UUID{Bytes: userID, Valid: true},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create prepared meal: %w", err)
@@ -186,10 +186,13 @@ func (s *Service) CookRecipe(ctx context.Context, fridgeID, userID uuid.UUID, in
 		Fat:       createdMeal.Fat,
 		Carbs:     createdMeal.Carbs,
 		Notes:     createdMeal.Notes,
-		CreatedBy: createdMeal.CreatedBy,
 		CreatedAt: createdMeal.CreatedAt,
 		UpdatedAt: createdMeal.UpdatedAt,
 		Status:    "good",
+	}
+	if createdMeal.CreatedBy.Valid {
+		uid := uuid.UUID(createdMeal.CreatedBy.Bytes)
+		mealDTO.CreatedBy = &uid
 	}
 	dateStr := expiry.Format("2006-01-02")
 	mealDTO.ExpiryDate = &dateStr

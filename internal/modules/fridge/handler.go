@@ -25,13 +25,26 @@ type CreateFridgeRequest struct {
 
 func (h *Handler) Routes(jwtSecret string) chi.Router {
 	r := chi.NewRouter()
-	r.Use(middleware.Auth(jwtSecret))
 
-	r.Get("/", h.GetFridges)
-	r.Post("/", h.CreateFridge)
-	r.Get("/{id}", h.GetFridge)
-	r.Post("/{id}/members", h.AddMember)
-	r.Delete("/{id}/members/{userID}", h.RemoveMember)
+	// Public invite details check
+	r.Get("/invites/{token}", h.GetInvite)
+
+	// Protected routes
+	r.Group(func(protected chi.Router) {
+		protected.Use(middleware.Auth(jwtSecret))
+
+		protected.Get("/", h.GetFridges)
+		protected.Post("/", h.CreateFridge)
+		protected.Get("/{id}", h.GetFridge)
+		protected.Post("/{id}/members", h.AddMember)
+		protected.Delete("/{id}/members/{userID}", h.RemoveMember)
+
+		// Module 2 endpoints
+		protected.Post("/{id}/invites", h.CreateInvite)
+		protected.Post("/join/{token}", h.JoinFridge)
+		protected.Post("/{id}/leave", h.LeaveFridge)
+		protected.Post("/{id}/transfer", h.TransferOwnership)
+	})
 
 	return r
 }
@@ -175,4 +188,132 @@ func (h *Handler) GetFridge(w http.ResponseWriter, r *http.Request) {
 	}
 
 	response.JSON(w, http.StatusOK, fridge)
+}
+
+func (h *Handler) CreateInvite(w http.ResponseWriter, r *http.Request) {
+	actorID, _ := middleware.GetUserID(r.Context())
+	fridgeIDStr := chi.URLParam(r, "id")
+	fridgeID, err := uuid.Parse(fridgeIDStr)
+	if err != nil {
+		response.Error(w, http.StatusBadRequest, "Invalid fridge ID", "INVALID_ID")
+		return
+	}
+
+	invite, err := h.service.CreateInvite(r.Context(), fridgeID, actorID)
+	if err != nil {
+		if errors.Is(err, ErrNotAuthorized) {
+			response.Error(w, http.StatusForbidden, "Лише власник або адміністратор може створювати запрошення", "FORBIDDEN")
+			return
+		}
+		response.Error(w, http.StatusInternalServerError, err.Error(), "CREATE_INVITE_FAILED")
+		return
+	}
+
+	response.JSON(w, http.StatusCreated, invite)
+}
+
+func (h *Handler) GetInvite(w http.ResponseWriter, r *http.Request) {
+	token := chi.URLParam(r, "token")
+	details, err := h.service.GetInviteDetails(r.Context(), token)
+	if err != nil {
+		if errors.Is(err, ErrInviteNotFoundOrExpired) {
+			response.Error(w, http.StatusNotFound, "Запрошення не знайдено або термін його дії вичерпано", "INVITE_EXPIRED")
+			return
+		}
+		response.Error(w, http.StatusInternalServerError, err.Error(), "INTERNAL_ERROR")
+		return
+	}
+
+	response.JSON(w, http.StatusOK, details)
+}
+
+func (h *Handler) JoinFridge(w http.ResponseWriter, r *http.Request) {
+	userID, ok := middleware.GetUserID(r.Context())
+	if !ok {
+		response.Error(w, http.StatusUnauthorized, "Unauthorized", "UNAUTHORIZED")
+		return
+	}
+	token := chi.URLParam(r, "token")
+
+	fridge, err := h.service.JoinFridge(r.Context(), token, userID)
+	if err != nil {
+		if errors.Is(err, ErrInviteNotFoundOrExpired) {
+			response.Error(w, http.StatusNotFound, "Запрошення не знайдено або термін його дії вичерпано", "INVITE_EXPIRED")
+			return
+		}
+		response.Error(w, http.StatusInternalServerError, err.Error(), "JOIN_FRIDGE_FAILED")
+		return
+	}
+
+	response.JSON(w, http.StatusOK, fridge)
+}
+
+func (h *Handler) LeaveFridge(w http.ResponseWriter, r *http.Request) {
+	userID, ok := middleware.GetUserID(r.Context())
+	if !ok {
+		response.Error(w, http.StatusUnauthorized, "Unauthorized", "UNAUTHORIZED")
+		return
+	}
+	fridgeIDStr := chi.URLParam(r, "id")
+	fridgeID, err := uuid.Parse(fridgeIDStr)
+	if err != nil {
+		response.Error(w, http.StatusBadRequest, "Invalid fridge ID", "INVALID_ID")
+		return
+	}
+
+	if err := h.service.LeaveFridge(r.Context(), fridgeID, userID); err != nil {
+		if errors.Is(err, ErrNotAuthorized) {
+			response.Error(w, http.StatusForbidden, "Ви не є учасником цього холодильника", "FORBIDDEN")
+			return
+		}
+		if errors.Is(err, ErrOwnerMustTransferOrDelete) {
+			response.Error(w, http.StatusConflict, "Власник не може покинути холодильник, поки є інші учасники. Передайте права або видаліть холодильник.", "OWNER_MUST_TRANSFER")
+			return
+		}
+		response.Error(w, http.StatusInternalServerError, err.Error(), "LEAVE_FRIDGE_FAILED")
+		return
+	}
+
+	response.JSON(w, http.StatusOK, map[string]string{"message": "Ви успішно покинули холодильник"})
+}
+
+func (h *Handler) TransferOwnership(w http.ResponseWriter, r *http.Request) {
+	currentOwnerID, ok := middleware.GetUserID(r.Context())
+	if !ok {
+		response.Error(w, http.StatusUnauthorized, "Unauthorized", "UNAUTHORIZED")
+		return
+	}
+	fridgeIDStr := chi.URLParam(r, "id")
+	fridgeID, err := uuid.Parse(fridgeIDStr)
+	if err != nil {
+		response.Error(w, http.StatusBadRequest, "Invalid fridge ID", "INVALID_ID")
+		return
+	}
+
+	var body struct {
+		NewOwnerID uuid.UUID `json:"new_owner_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.NewOwnerID == uuid.Nil {
+		response.Error(w, http.StatusBadRequest, "new_owner_id is required", "INVALID_REQUEST")
+		return
+	}
+
+	if err := h.service.TransferOwnership(r.Context(), fridgeID, currentOwnerID, body.NewOwnerID); err != nil {
+		if errors.Is(err, ErrCannotTransferToSelf) {
+			response.Error(w, http.StatusBadRequest, "Неможливо передати права самому собі", "CANNOT_TRANSFER_TO_SELF")
+			return
+		}
+		if errors.Is(err, ErrNotAuthorized) {
+			response.Error(w, http.StatusForbidden, "Лише власник холодильника може передавати права власності", "FORBIDDEN")
+			return
+		}
+		if errors.Is(err, ErrMemberNotFound) {
+			response.Error(w, http.StatusNotFound, "Цільовий користувач не є учасником цього холодильника", "USER_NOT_FOUND")
+			return
+		}
+		response.Error(w, http.StatusInternalServerError, err.Error(), "TRANSFER_FAILED")
+		return
+	}
+
+	response.JSON(w, http.StatusOK, map[string]string{"message": "Права власності успішно передано"})
 }
