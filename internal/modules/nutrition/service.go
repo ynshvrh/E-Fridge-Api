@@ -11,15 +11,41 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/ynshvrh/E-Fridge-Api/internal/database"
 	"github.com/ynshvrh/E-Fridge-Api/internal/db"
+	"github.com/ynshvrh/E-Fridge-Api/internal/pkg/units"
 )
+
+var kyivLocation *time.Location
+
+func init() {
+	loc, err := time.LoadLocation("Europe/Kyiv")
+	if err == nil {
+		kyivLocation = loc
+	} else {
+		kyivLocation = time.FixedZone("EET", 2*60*60)
+	}
+}
+
+// GetCurrentKyivDate returns current time in Europe/Kyiv timezone.
+func GetCurrentKyivDate() time.Time {
+	if kyivLocation != nil {
+		return time.Now().In(kyivLocation)
+	}
+	return time.Now()
+}
 
 type Service struct {
 	queries *db.Queries
+	pool    *pgxpool.Pool
 }
 
-func NewService(queries *db.Queries) *Service {
-	return &Service{queries: queries}
+func NewService(queries *db.Queries, pool *pgxpool.Pool) *Service {
+	return &Service{
+		queries: queries,
+		pool:    pool,
+	}
 }
 
 type LogMealInput struct {
@@ -121,9 +147,15 @@ func (s *Service) LogMeal(ctx context.Context, userID uuid.UUID, input LogMealIn
 		return nil, errors.New("food name is required")
 	}
 
-	date, err := time.Parse("2006-01-02", input.Date)
-	if err != nil {
-		date = time.Now()
+	var date time.Time
+	if strings.TrimSpace(input.Date) != "" {
+		d, err := time.Parse("2006-01-02", input.Date)
+		if err == nil {
+			date = d
+		}
+	}
+	if date.IsZero() {
+		date = GetCurrentKyivDate()
 	}
 
 	mealType := strings.TrimSpace(input.MealType)
@@ -262,9 +294,13 @@ func (s *Service) UpdateLog(ctx context.Context, id, userID uuid.UUID, input Upd
 }
 
 func (s *Service) GetDailySummary(ctx context.Context, userID uuid.UUID, dateStr string) (*DailySummaryDTO, error) {
-	parsedDate, err := time.Parse("2006-01-02", dateStr)
-	if err != nil {
-		parsedDate = time.Now()
+	var parsedDate time.Time
+	var err error
+	if strings.TrimSpace(dateStr) != "" {
+		parsedDate, err = time.Parse("2006-01-02", dateStr)
+	}
+	if err != nil || parsedDate.IsZero() {
+		parsedDate = GetCurrentKyivDate()
 		dateStr = parsedDate.Format("2006-01-02")
 	}
 
@@ -319,60 +355,100 @@ func (s *Service) DeleteLog(ctx context.Context, id, userID uuid.UUID) (*DeleteL
 	var restoredToFridge bool
 	var restoredFridgeID string
 
-	// If logged from a fridge, return consumed stock back into the fridge!
-	if log.FridgeID.Valid {
-		fridgeID := log.FridgeID.Bytes
-		restoredFridgeID = uuid.UUID(fridgeID).String()
+	executeInTx := func(q *db.Queries) error {
+		// If logged from a fridge, return consumed stock back into the fridge!
+		if log.FridgeID.Valid {
+			fridgeID := log.FridgeID.Bytes
+			restoredFridgeID = uuid.UUID(fridgeID).String()
 
-		// 1. Try to restore to existing product if product still exists
-		if log.ProductID.Valid {
-			prodID := log.ProductID.Bytes
-			prod, err := s.queries.GetProductByID(ctx, db.GetProductByIDParams{
-				ID:       prodID,
-				FridgeID: fridgeID,
-			})
-			if err == nil {
-				// Product exists! Add back consumed quantity
-				newQty := math.Round((prod.Quantity+log.Quantity)*1000) / 1000
-				_, _ = s.queries.UpdateProductQuantity(ctx, db.UpdateProductQuantityParams{
+			// 1. Try to restore to existing product if product still exists
+			if log.ProductID.Valid {
+				prodID := log.ProductID.Bytes
+				prod, err := q.GetProductByID(ctx, db.GetProductByIDParams{
 					ID:       prodID,
 					FridgeID: fridgeID,
-					Quantity: newQty,
 				})
-				restoredToFridge = true
+				if err == nil {
+					// Convert log quantity to product storage unit!
+					convertedQty := units.Convert(log.Quantity, log.Unit, prod.Unit)
+					if convertedQty == log.Quantity && !units.AreCompatible(log.Unit, prod.Unit) {
+						normLog := units.Normalize(log.Unit)
+						normProd := units.Normalize(prod.Unit)
+						pieceGrams := GetPackageOrPieceGrams(prod.Name)
+						if pieceGrams <= 0 {
+							pieceGrams = 100.0
+						}
+						if (normLog == units.Piece || normLog == units.Pack) && (normProd == units.Gram || normProd == units.Kilogram) {
+							grams := log.Quantity * pieceGrams
+							if normProd == units.Kilogram {
+								convertedQty = grams / 1000.0
+							} else {
+								convertedQty = grams
+							}
+						} else if (normLog == units.Gram || normLog == units.Kilogram) && (normProd == units.Piece || normProd == units.Pack) {
+							grams := log.Quantity
+							if normLog == units.Kilogram {
+								grams *= 1000.0
+							}
+							convertedQty = grams / pieceGrams
+						}
+					}
+
+					newQty := math.Round((prod.Quantity+convertedQty)*1000) / 1000
+					_, err = q.UpdateProductQuantity(ctx, db.UpdateProductQuantityParams{
+						ID:       prodID,
+						FridgeID: fridgeID,
+						Quantity: newQty,
+					})
+					if err != nil {
+						return fmt.Errorf("failed to update product quantity: %w", err)
+					}
+					restoredToFridge = true
+				}
+			}
+
+			// 2. If product was completely eaten (removed from fridge) or ID was null, recreate it!
+			if !restoredToFridge {
+				expiry := pgtype.Date{Time: GetCurrentKyivDate().AddDate(0, 0, 4), Valid: true}
+				_, err := q.CreateProduct(ctx, db.CreateProductParams{
+					FridgeID:   fridgeID,
+					Name:       log.FoodName,
+					Category:   "other",
+					Quantity:   log.Quantity,
+					Unit:       log.Unit,
+					ExpiryDate: expiry,
+					Calories:   log.Calories,
+					Protein:    log.Protein,
+					Fat:        log.Fat,
+					Carbs:      log.Carbs,
+					Notes:      "Повернено зі щоденника харчування",
+					CreatedBy:  pgtype.UUID{Bytes: userID, Valid: true},
+				})
+				if err == nil {
+					restoredToFridge = true
+				}
 			}
 		}
 
-		// 2. If product was completely eaten (removed from fridge) or ID was null, recreate it!
-		if !restoredToFridge {
-			expiry := pgtype.Date{Time: time.Now().AddDate(0, 0, 4), Valid: true}
-			_, err := s.queries.CreateProduct(ctx, db.CreateProductParams{
-				FridgeID:   fridgeID,
-				Name:       log.FoodName,
-				Category:   "other",
-				Quantity:   log.Quantity,
-				Unit:       log.Unit,
-				ExpiryDate: expiry,
-				Calories:   log.Calories,
-				Protein:    log.Protein,
-				Fat:        log.Fat,
-				Carbs:      log.Carbs,
-				Notes:      "Повернено зі щоденника харчування",
-				CreatedBy:  pgtype.UUID{Bytes: userID, Valid: true},
-			})
-			if err == nil {
-				restoredToFridge = true
-			}
+		// Delete log entry
+		if err := q.DeleteNutritionLog(ctx, db.DeleteNutritionLogParams{
+			ID:     id,
+			UserID: userID,
+		}); err != nil {
+			return fmt.Errorf("failed to delete nutrition log: %w", err)
 		}
+
+		return nil
 	}
 
-	// Delete log entry
-	err = s.queries.DeleteNutritionLog(ctx, db.DeleteNutritionLogParams{
-		ID:     id,
-		UserID: userID,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to delete nutrition log: %w", err)
+	if s.pool != nil {
+		if err := database.WithTransaction(ctx, s.pool, executeInTx); err != nil {
+			return nil, err
+		}
+	} else {
+		if err := executeInTx(s.queries); err != nil {
+			return nil, err
+		}
 	}
 
 	msg := "Запис видалено"

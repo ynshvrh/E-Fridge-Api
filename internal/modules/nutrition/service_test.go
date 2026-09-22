@@ -30,7 +30,7 @@ func TestUpdateNutritionLogWithDB(t *testing.T) {
 	defer dbConn.Close()
 
 	queries := db.New(dbConn.Pool)
-	service := NewService(queries)
+	service := NewService(queries, dbConn.Pool)
 
 	// Setup user
 	u, err := queries.CreateUser(ctx, db.CreateUserParams{
@@ -94,7 +94,7 @@ func TestDeleteLogRestoresToFridgeWithDB(t *testing.T) {
 	defer dbConn.Close()
 
 	queries := db.New(dbConn.Pool)
-	service := NewService(queries)
+	service := NewService(queries, dbConn.Pool)
 
 	// Setup user & fridge
 	u, err := queries.CreateUser(ctx, db.CreateUserParams{
@@ -175,5 +175,100 @@ func TestDeleteLogRestoresToFridgeWithDB(t *testing.T) {
 
 	if updatedProd.Quantity != 500 {
 		t.Errorf("expected restored quantity 500, got %v", updatedProd.Quantity)
+	}
+}
+
+func TestDeleteLogWeightDistortionFixWithDB(t *testing.T) {
+	ctx := context.Background()
+	dbURL := getTestDBURL()
+	dbConn, err := database.Connect(ctx, dbURL)
+	if err != nil {
+		t.Skip("skipping DB test, cannot connect to PostgreSQL")
+		return
+	}
+	defer dbConn.Close()
+
+	queries := db.New(dbConn.Pool)
+	service := NewService(queries, dbConn.Pool)
+
+	// Setup user & fridge
+	u, err := queries.CreateUser(ctx, db.CreateUserParams{
+		Email:        "nutr_distortion_" + uuid.New().String()[:8] + "@example.com",
+		Name:         "Distortion Tester",
+		PasswordHash: "dummyhash",
+	})
+	if err != nil {
+		t.Fatalf("failed to create user: %v", err)
+	}
+	defer func() {
+		_, _ = dbConn.Pool.Exec(ctx, "DELETE FROM users WHERE id = $1", u.ID)
+	}()
+
+	fridge, err := queries.CreateFridge(ctx, db.CreateFridgeParams{
+		Name:    "Тестовий холодильник",
+		OwnerID: u.ID,
+	})
+	if err != nil {
+		t.Fatalf("failed to create fridge: %v", err)
+	}
+
+	// Create product in fridge with unit "кг": 1.0 kg
+	prod, err := queries.CreateProduct(ctx, db.CreateProductParams{
+		FridgeID:   fridge.ID,
+		Name:       "Яблука",
+		Category:   "fruits",
+		Quantity:   1.0,
+		Unit:       "кг",
+		ExpiryDate: pgtype.Date{Time: time.Now().AddDate(0, 0, 7), Valid: true},
+		Calories:   52,
+		Protein:    0.3,
+		Fat:        0.2,
+		Carbs:      14,
+		Notes:      "",
+		CreatedBy:  pgtype.UUID{Bytes: u.ID, Valid: true},
+	})
+	if err != nil {
+		t.Fatalf("failed to create product: %v", err)
+	}
+
+	// User logs eating 150 grams of this product
+	logged, err := service.LogMeal(ctx, u.ID, LogMealInput{
+		Date:      time.Now().Format("2006-01-02"),
+		MealType:  "snack",
+		FoodName:  prod.Name,
+		Quantity:  150,
+		Unit:      "г",
+		Calories:  78,
+		Protein:   0.45,
+		Fat:       0.3,
+		Carbs:     21,
+		ProductID: &prod.ID,
+		FridgeID:  &fridge.ID,
+	})
+	if err != nil {
+		t.Fatalf("failed to log meal: %v", err)
+	}
+
+	// Delete the log entry
+	deleteRes, err := service.DeleteLog(ctx, logged.ID, u.ID)
+	if err != nil {
+		t.Fatalf("failed to delete log: %v", err)
+	}
+
+	if !deleteRes.RestoredToFridge {
+		t.Errorf("expected product to be restored to fridge")
+	}
+
+	// Product in kg must be 1.0 kg + 0.15 kg = 1.15 kg! NOT 151 kg!
+	updatedProd, err := queries.GetProductByID(ctx, db.GetProductByIDParams{
+		ID:       prod.ID,
+		FridgeID: fridge.ID,
+	})
+	if err != nil {
+		t.Fatalf("failed to get updated product: %v", err)
+	}
+
+	if updatedProd.Quantity != 1.15 {
+		t.Fatalf("CRITICAL WEIGHT DISTORTION BUG: expected 1.15 kg, but got %v kg (check unit conversion in DeleteLog!)", updatedProd.Quantity)
 	}
 }
