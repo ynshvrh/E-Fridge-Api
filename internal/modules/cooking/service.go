@@ -2,15 +2,21 @@ package cooking
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"math"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/ynshvrh/E-Fridge-Api/internal/database"
 	"github.com/ynshvrh/E-Fridge-Api/internal/db"
 	"github.com/ynshvrh/E-Fridge-Api/internal/modules/nutrition"
 	"github.com/ynshvrh/E-Fridge-Api/internal/modules/products"
+	"github.com/ynshvrh/E-Fridge-Api/internal/pkg/units"
 )
 
 type CookIngredient struct {
@@ -20,13 +26,13 @@ type CookIngredient struct {
 }
 
 type CookRecipeInput struct {
-	RecipeTitle    string           `json:"recipe_title"`
-	Servings       float64          `json:"servings"`
-	ExpiryDays     int              `json:"expiry_days"`
-	Ingredients    []CookIngredient `json:"ingredients"`
-	IgnoreMissing  bool             `json:"ignore_missing"`
-	AutoLogAsMeal  bool             `json:"auto_log_as_meal"`
-	MealType       string           `json:"meal_type"` // breakfast, lunch, dinner, snack
+	RecipeTitle   string           `json:"recipe_title"`
+	Servings      float64          `json:"servings"`
+	ExpiryDays    int              `json:"expiry_days"`
+	Ingredients   []CookIngredient `json:"ingredients"`
+	IgnoreMissing bool             `json:"ignore_missing"`
+	AutoLogAsMeal bool             `json:"auto_log_as_meal"`
+	MealType      string           `json:"meal_type"` // breakfast, lunch, dinner, snack
 }
 
 type DeductedItem struct {
@@ -49,25 +55,40 @@ type ConsumeMealInput struct {
 	Amount    float64   `json:"amount,omitempty"`
 	Unit      string    `json:"unit,omitempty"`
 	MealType  string    `json:"meal_type"`
+	Date      string    `json:"date,omitempty"` // optional client date (YYYY-MM-DD)
 }
 
 type Service struct {
 	queries          *db.Queries
+	pool             *pgxpool.Pool
 	productsService  *products.Service
 	nutritionService *nutrition.Service
 }
 
-func NewService(queries *db.Queries, prodSvc *products.Service, nutrSvc *nutrition.Service) *Service {
+func NewService(queries *db.Queries, pool *pgxpool.Pool, prodSvc *products.Service, nutrSvc *nutrition.Service) *Service {
 	return &Service{
 		queries:          queries,
+		pool:             pool,
 		productsService:  prodSvc,
 		nutritionService: nutrSvc,
 	}
 }
 
+type plannedDeduction struct {
+	productID    uuid.UUID
+	productName  string
+	deductQty    float64
+	unit         string
+	fullyUsed    bool
+	remainingQty float64
+}
+
 func (s *Service) CookRecipe(ctx context.Context, fridgeID, userID uuid.UUID, input CookRecipeInput) (*CookResultDTO, error) {
 	if strings.TrimSpace(input.RecipeTitle) == "" {
-		return nil, fmt.Errorf("recipe title is required")
+		return nil, errors.New("recipe title is required")
+	}
+	if len(input.Ingredients) == 0 {
+		return nil, errors.New("не вказано інгредієнти для страви")
 	}
 	if input.Servings <= 0 {
 		input.Servings = 1
@@ -81,97 +102,177 @@ func (s *Service) CookRecipe(ctx context.Context, fridgeID, userID uuid.UUID, in
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch fridge products: %w", err)
 	}
+	if len(fridgeProds) == 0 {
+		return nil, errors.New("у вашому холодильнику немає продуктів: спочатку додайте або купіть інгредієнти")
+	}
 
-	var deductions []DeductedItem
+	// In-memory simulation of available product quantities to prevent overdrafting
+	simulatedQty := make(map[uuid.UUID]float64)
+	for _, p := range fridgeProds {
+		simulatedQty[p.ID] = p.Quantity
+	}
+
+	var planned []plannedDeduction
 	var missing []string
 
 	totalCalories := 0
 	var totalProtein, totalFat, totalCarbs float64
+	matchedCount := 0
+	matchedMajorCount := 0
+	totalMajorCount := 0
 
-	// 2. Process ingredients
+	// 2. Process and validate ingredients in memory (Dry Run)
 	for _, ing := range input.Ingredients {
 		if strings.TrimSpace(ing.Name) == "" {
 			continue
 		}
 
-		// Calculate nutrition for ingredient
 		cals, p, f, c := nutrition.CalculateEstimatedNutrition(ing.Name, ing.Quantity, ing.Unit)
 		totalCalories += cals
 		totalProtein += p
 		totalFat += f
 		totalCarbs += c
 
-		// Find match in fridge
-		match := FindFridgeProductMatch(ing.Name, fridgeProds)
+		isMinor := isMinorIngredient(ing.Name, ing.Unit, ing.Quantity)
+		if !isMinor {
+			totalMajorCount++
+		}
 
+		match := FindFridgeProductMatch(ing.Name, fridgeProds)
 		if match == nil {
 			missing = append(missing, fmt.Sprintf("%s (%v %s)", ing.Name, ing.Quantity, ing.Unit))
 			continue
 		}
 
-		// Convert and deduct
-		deductQty := convertUnits(ing.Quantity, ing.Unit, match.Unit)
-		if match.Quantity < deductQty && !input.IgnoreMissing {
-			missing = append(missing, fmt.Sprintf("%s (потрібно %v %s, є %v %s)", match.Name, deductQty, match.Unit, match.Quantity, match.Unit))
+		deductQty := convertUnitsWithFood(ing.Quantity, ing.Unit, match.Unit, match.Name)
+		avail := simulatedQty[match.ID]
+
+		if avail < deductQty {
+			missing = append(missing, fmt.Sprintf("%s (потрібно %v %s, є %v %s)", match.Name, deductQty, match.Unit, avail, match.Unit))
 			continue
 		}
 
-		fullyUsed := false
-		if match.Quantity <= deductQty {
-			fullyUsed = true
-			_ = s.queries.DeleteProduct(ctx, db.DeleteProductParams{
-				ID:       match.ID,
-				FridgeID: fridgeID,
-			})
-			match.Quantity = 0
-		} else {
-			match.Quantity -= deductQty
-			_, _ = s.queries.UpdateProductQuantity(ctx, db.UpdateProductQuantityParams{
-				ID:       match.ID,
-				FridgeID: fridgeID,
-				Quantity: match.Quantity,
-			})
+		matchedCount++
+		if !isMinor {
+			matchedMajorCount++
 		}
 
-		deductions = append(deductions, DeductedItem{
-			ProductName: match.Name,
-			DeductedQty: deductQty,
-			Unit:        match.Unit,
-			FullyUsed:   fullyUsed,
+		simulatedQty[match.ID] -= deductQty
+		fullyUsed := simulatedQty[match.ID] <= 0
+		planned = append(planned, plannedDeduction{
+			productID:    match.ID,
+			productName:  match.Name,
+			deductQty:    deductQty,
+			unit:         match.Unit,
+			fullyUsed:    fullyUsed,
+			remainingQty: math.Round(simulatedQty[match.ID]*1000) / 1000,
 		})
 	}
 
-	// If missing items and user didn't allow ignoring missing
+	// Anti-Thin-Air checks:
+	if len(planned) == 0 {
+		return nil, errors.New("неможливо приготувати страву: жоден із необхідних інгредієнтів не знайдено в холодильнику")
+	}
 	if len(missing) > 0 && !input.IgnoreMissing {
+		var deductions []DeductedItem
+		for _, pl := range planned {
+			deductions = append(deductions, DeductedItem{
+				ProductName: pl.productName,
+				DeductedQty: pl.deductQty,
+				Unit:        pl.unit,
+				FullyUsed:   pl.fullyUsed,
+			})
+		}
 		return &CookResultDTO{
 			Deductions: deductions,
 			Missing:    missing,
 		}, fmt.Errorf("missing required ingredients: %s", strings.Join(missing, ", "))
 	}
+	if input.IgnoreMissing && totalMajorCount > 0 && matchedMajorCount == 0 {
+		return nil, errors.New("неможливо приготувати страву: відсутні всі основні інгредієнти (знайдено лише спеції або приправи)")
+	}
 
-	// 3. Create prepared meal in fridge
+	// 3. Transactional execution (Database Writes)
+	var createdMeal db.Product
+	var deductions []DeductedItem
+
 	perServingCals := int32(float64(totalCalories) / input.Servings)
 	perServingProtein := round2(totalProtein / input.Servings)
 	perServingFat := round2(totalFat / input.Servings)
 	perServingCarbs := round2(totalCarbs / input.Servings)
+	expiry := nutrition.GetCurrentKyivDate().AddDate(0, 0, input.ExpiryDays)
 
-	expiry := time.Now().AddDate(0, 0, input.ExpiryDays)
-	createdMeal, err := s.queries.CreateProduct(ctx, db.CreateProductParams{
-		FridgeID:   fridgeID,
-		Name:       input.RecipeTitle,
-		Category:   "prepared-meals",
-		Quantity:   input.Servings,
-		Unit:       "порц",
-		ExpiryDate: pgtype.Date{Time: expiry, Valid: true},
-		Calories:   perServingCals,
-		Protein:    perServingProtein,
-		Fat:        perServingFat,
-		Carbs:      perServingCarbs,
-		Notes:      "Свіжоприготована страва",
-		CreatedBy:  pgtype.UUID{Bytes: userID, Valid: true},
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to create prepared meal: %w", err)
+	executeTx := func(q *db.Queries) error {
+		// Aggregate planned deductions by productID
+		productDeductions := make(map[uuid.UUID]float64)
+		for _, pl := range planned {
+			productDeductions[pl.productID] += pl.deductQty
+		}
+
+		for _, pl := range planned {
+			deductions = append(deductions, DeductedItem{
+				ProductName: pl.productName,
+				DeductedQty: pl.deductQty,
+				Unit:        pl.unit,
+				FullyUsed:   pl.fullyUsed,
+			})
+		}
+
+		for prodID, totalDeduct := range productDeductions {
+			current, err := q.GetProductByID(ctx, db.GetProductByIDParams{
+				ID:       prodID,
+				FridgeID: fridgeID,
+			})
+			if err != nil {
+				return fmt.Errorf("failed to fetch product %s for deduction: %w", prodID, err)
+			}
+			newQty := math.Round((current.Quantity-totalDeduct)*1000) / 1000
+			if newQty <= 0 {
+				if err := q.DeleteProduct(ctx, db.DeleteProductParams{ID: prodID, FridgeID: fridgeID}); err != nil {
+					return fmt.Errorf("failed to delete fully used product %s: %w", prodID, err)
+				}
+			} else {
+				if _, err := q.UpdateProductQuantity(ctx, db.UpdateProductQuantityParams{
+					ID:       prodID,
+					FridgeID: fridgeID,
+					Quantity: newQty,
+				}); err != nil {
+					return fmt.Errorf("failed to update product quantity for %s: %w", prodID, err)
+				}
+			}
+		}
+
+		// Create prepared meal in fridge
+		meal, err := q.CreateProduct(ctx, db.CreateProductParams{
+			FridgeID:   fridgeID,
+			Name:       input.RecipeTitle,
+			Category:   "prepared-meals",
+			Quantity:   input.Servings,
+			Unit:       "порц",
+			ExpiryDate: pgtype.Date{Time: expiry, Valid: true},
+			Calories:   perServingCals,
+			Protein:    perServingProtein,
+			Fat:        perServingFat,
+			Carbs:      perServingCarbs,
+			Notes:      "Свіжоприготована страва",
+			CreatedBy:  pgtype.UUID{Bytes: userID, Valid: true},
+		})
+		if err != nil {
+			return fmt.Errorf("failed to create prepared meal: %w", err)
+		}
+		createdMeal = meal
+
+		return nil
+	}
+
+	if s.pool != nil {
+		if err := database.WithTransaction(ctx, s.pool, executeTx); err != nil {
+			return nil, err
+		}
+	} else {
+		if err := executeTx(s.queries); err != nil {
+			return nil, err
+		}
 	}
 
 	mealDTO := products.ProductDTO{
@@ -216,7 +317,7 @@ func (s *Service) CookRecipe(ctx context.Context, fridgeID, userID uuid.UUID, in
 		mealDTO.Quantity -= 1
 
 		logged, err := s.nutritionService.LogMeal(ctx, userID, nutrition.LogMealInput{
-			Date:     time.Now().Format("2006-01-02"),
+			Date:     nutrition.GetCurrentKyivDate().Format("2006-01-02"),
 			MealType: input.MealType,
 			FoodName: input.RecipeTitle,
 			Quantity:  1,
@@ -260,14 +361,7 @@ func (s *Service) ConsumeMeal(ctx context.Context, fridgeID, userID uuid.UUID, i
 		mealType = "snack"
 	}
 
-	// 1. Consume from fridge with unit
-	updatedProd, err := s.productsService.ConsumeProductWithUnit(ctx, fridgeID, input.ProductID, amount, unit)
-	if err != nil {
-		return nil, err
-	}
-
-
-	// 3. Calculate accurate nutrition for the logged meal
+	// Calculate accurate nutrition for the logged meal
 	var cals int32
 	var p, f, c float64
 
@@ -292,7 +386,6 @@ func (s *Service) ConsumeMeal(ctx context.Context, fridgeID, userID uuid.UUID, i
 		c = round2(prod.Carbs * portionsConsumed)
 	} else {
 		// For standard groceries, nutrition is stored per 100g/100ml.
-		// Convert consumed quantity to grams/ml:
 		gramsConsumed := convertUnitsWithFood(amount, unit, "г", prod.Name)
 		if gramsConsumed <= 0 {
 			gramsConsumed = amount
@@ -304,27 +397,80 @@ func (s *Service) ConsumeMeal(ctx context.Context, fridgeID, userID uuid.UUID, i
 		c = round2(prod.Carbs * factor)
 	}
 
-	// 4. Log to nutrition
-	logged, err := s.nutritionService.LogMeal(ctx, userID, nutrition.LogMealInput{
-		Date:     time.Now().Format("2006-01-02"),
-		MealType: mealType,
-		FoodName: prod.Name,
-		Quantity:  amount,
-		Unit:      unit,
-		Calories:  cals,
-		Protein:   p,
-		Fat:       f,
-		Carbs:     c,
-		ProductID: &prod.ID,
-		FridgeID:  &fridgeID,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("consumed product but failed to log nutrition: %w", err)
+	dateStr := strings.TrimSpace(input.Date)
+	if dateStr == "" {
+		dateStr = nutrition.GetCurrentKyivDate().Format("2006-01-02")
+	}
+
+	var updatedProd *products.ProductDTO
+	var loggedMeal *nutrition.NutritionLogDTO
+
+	// Transactional execution: consume from fridge AND log meal atomically
+	executeTx := func(q *db.Queries) error {
+		consumed, err := s.productsService.ConsumeProductWithUnitTx(ctx, q, fridgeID, input.ProductID, amount, unit)
+		if err != nil {
+			return err
+		}
+		updatedProd = consumed
+
+		prodIDVal := pgtype.UUID{Bytes: prod.ID, Valid: true}
+		fridgeIDVal := pgtype.UUID{Bytes: fridgeID, Valid: true}
+		parsedDate, err := time.Parse("2006-01-02", dateStr)
+		if err != nil {
+			parsedDate = nutrition.GetCurrentKyivDate()
+		}
+
+		logEntry, err := q.CreateNutritionLog(ctx, db.CreateNutritionLogParams{
+			UserID:    userID,
+			Date:      pgtype.Date{Time: parsedDate, Valid: true},
+			MealType:  mealType,
+			FoodName:  prod.Name,
+			Quantity:  amount,
+			Unit:      unit,
+			Calories:  cals,
+			Protein:   p,
+			Fat:       f,
+			Carbs:     c,
+			ProductID: prodIDVal,
+			FridgeID:  fridgeIDVal,
+		})
+		if err != nil {
+			return fmt.Errorf("consumed product but failed to log nutrition: %w", err)
+		}
+
+		dto := nutrition.NutritionLogDTO{
+			ID:        logEntry.ID,
+			UserID:    logEntry.UserID,
+			Date:      logEntry.Date.Time.Format("2006-01-02"),
+			MealType:  logEntry.MealType,
+			FoodName:  logEntry.FoodName,
+			Quantity:  logEntry.Quantity,
+			Unit:      logEntry.Unit,
+			Calories:  logEntry.Calories,
+			Protein:   logEntry.Protein,
+			Fat:       logEntry.Fat,
+			Carbs:     logEntry.Carbs,
+			LoggedAt:  logEntry.LoggedAt,
+			ProductID: &prod.ID,
+			FridgeID:  &fridgeID,
+		}
+		loggedMeal = &dto
+		return nil
+	}
+
+	if s.pool != nil {
+		if err := database.WithTransaction(ctx, s.pool, executeTx); err != nil {
+			return nil, err
+		}
+	} else {
+		if err := executeTx(s.queries); err != nil {
+			return nil, err
+		}
 	}
 
 	return &CookResultDTO{
 		PreparedMeal: updatedProd,
-		LoggedMeal:   logged,
+		LoggedMeal:   loggedMeal,
 	}, nil
 }
 
@@ -333,136 +479,259 @@ func convertUnits(qty float64, fromUnit, toUnit string) float64 {
 }
 
 func convertUnitsWithFood(qty float64, fromUnit, toUnit, foodName string) float64 {
-	from := strings.ToLower(strings.TrimSpace(fromUnit))
-	to := strings.ToLower(strings.TrimSpace(toUnit))
+	fromNorm := units.Normalize(fromUnit)
+	toNorm := units.Normalize(toUnit)
 
-	if from == to || from == "" || to == "" {
+	if fromNorm == toNorm || fromNorm == "" || toNorm == "" {
 		return qty
 	}
 
-	// Direct weight conversions
-	if (from == "kg" || from == "кг") && (to == "g" || to == "г") {
-		return qty * 1000.0
-	}
-	if (from == "g" || from == "г") && (to == "kg" || to == "кг") {
-		return qty / 1000.0
+	// Check standard conversions (g <-> kg, ml <-> l, servings, tbsp, tsp, etc.)
+	converted := units.Convert(qty, fromNorm, toNorm)
+	if converted != qty || units.AreCompatible(fromNorm, toNorm) {
+		return converted
 	}
 
-	// Direct volume conversions
-	if (from == "l" || from == "л") && (to == "ml" || to == "мл") {
-		return qty * 1000.0
-	}
-	if (from == "ml" || from == "мл") && (to == "l" || to == "л") {
-		return qty / 1000.0
-	}
-
-	// Serving conversions
-	if (from == "порц" || from == "порція") && (to == "порц" || to == "порція") {
-		return qty
-	}
-	if (from == "порц" || from == "порція") && (to == "g" || to == "г" || to == "ml" || to == "мл") {
-		return qty * 300.0
-	}
-	if (from == "порц" || from == "порція") && (to == "kg" || to == "кг" || to == "l" || to == "л") {
-		return (qty * 300.0) / 1000.0
-	}
-	if (from == "g" || from == "г" || from == "ml" || from == "мл") && (to == "порц" || to == "порція") {
-		return qty / 300.0
-	}
-	if (from == "kg" || from == "кг" || from == "l" || from == "л") && (to == "порц" || to == "порція") {
-		return (qty * 1000.0) / 300.0
-	}
-
-	// Piece and package conversions
+	// Piece and package conversions using nutrition piece weight
 	pieceGrams := nutrition.GetPackageOrPieceGrams(foodName)
 	if pieceGrams <= 0 {
 		pieceGrams = 100.0
 	}
 
-	if (from == "шт" || from == "pcs") && (to == "g" || to == "г" || to == "ml" || to == "мл") {
+	if (fromNorm == units.Piece || fromNorm == units.Pack) && (toNorm == units.Gram || toNorm == units.Milliliter) {
 		return qty * pieceGrams
 	}
-	if (from == "шт" || from == "pcs") && (to == "kg" || to == "кг" || to == "l" || to == "л") {
+	if (fromNorm == units.Piece || fromNorm == units.Pack) && (toNorm == units.Kilogram || toNorm == units.Liter) {
 		return (qty * pieceGrams) / 1000.0
 	}
-	if (from == "g" || from == "г" || from == "ml" || from == "мл") && (to == "шт" || to == "pcs") {
+	if (fromNorm == units.Gram || fromNorm == units.Milliliter) && (toNorm == units.Piece || toNorm == units.Pack) {
 		return qty / pieceGrams
 	}
-	if (from == "kg" || from == "кг" || from == "l" || from == "л") && (to == "шт" || to == "pcs") {
+	if (fromNorm == units.Kilogram || fromNorm == units.Liter) && (toNorm == units.Piece || toNorm == units.Pack) {
 		return (qty * 1000.0) / pieceGrams
 	}
 
 	return qty
 }
 
-
 func round2(val float64) float64 {
 	return float64(int(val*100+0.5)) / 100
 }
 
-// FindFridgeProductMatch searches for a matching product in the fridge inventory using substring and synonyms.
+// Canonical Ukrainian and English synonyms dictionary
+var canonicalAliases = map[string]string{
+	"курка": "CANONICAL_CHICKEN", "куряче": "CANONICAL_CHICKEN", "куряча": "CANONICAL_CHICKEN",
+	"курячий": "CANONICAL_CHICKEN", "курятина": "CANONICAL_CHICKEN", "курча": "CANONICAL_CHICKEN", "chicken": "CANONICAL_CHICKEN",
+	"яйце": "CANONICAL_EGG", "яйця": "CANONICAL_EGG", "яєць": "CANONICAL_EGG", "яйцем": "CANONICAL_EGG", "egg": "CANONICAL_EGG", "eggs": "CANONICAL_EGG",
+	"помідор": "CANONICAL_TOMATO", "помідори": "CANONICAL_TOMATO", "помідорів": "CANONICAL_TOMATO", "томат": "CANONICAL_TOMATO", "томати": "CANONICAL_TOMATO", "чері": "CANONICAL_TOMATO", "tomato": "CANONICAL_TOMATO",
+	"творог": "CANONICAL_COTTAGE_CHEESE", "сир кисломолочний": "CANONICAL_COTTAGE_CHEESE", "кисломолочний": "CANONICAL_COTTAGE_CHEESE", "домашній сир": "CANONICAL_COTTAGE_CHEESE", "cottage cheese": "CANONICAL_COTTAGE_CHEESE",
+	"масло": "CANONICAL_BUTTER", "масло вершкове": "CANONICAL_BUTTER", "вершкове масло": "CANONICAL_BUTTER", "butter": "CANONICAL_BUTTER",
+	"олія": "CANONICAL_OIL", "рослинна олія": "CANONICAL_OIL", "соняшникова олія": "CANONICAL_OIL", "оливкова олія": "CANONICAL_OIL", "oil": "CANONICAL_OIL",
+	"паста": "CANONICAL_PASTA", "макарони": "CANONICAL_PASTA", "спагеті": "CANONICAL_PASTA", "вермішель": "CANONICAL_PASTA", "pasta": "CANONICAL_PASTA", "spaghetti": "CANONICAL_PASTA",
+	"сіль": "CANONICAL_SALT", "солі": "CANONICAL_SALT", "salt": "CANONICAL_SALT",
+	"перець": "CANONICAL_PEPPER", "перцю": "CANONICAL_PEPPER", "pepper": "CANONICAL_PEPPER",
+	"часник": "CANONICAL_GARLIC", "часнику": "CANONICAL_GARLIC", "garlic": "CANONICAL_GARLIC",
+	"цибуля": "CANONICAL_ONION", "цибулі": "CANONICAL_ONION", "onion": "CANONICAL_ONION",
+	"морква": "CANONICAL_CARROT", "моркви": "CANONICAL_CARROT", "carrot": "CANONICAL_CARROT",
+	"картопля": "CANONICAL_POTATO", "картоплі": "CANONICAL_POTATO", "potato": "CANONICAL_POTATO",
+	"молоко": "CANONICAL_MILK", "milk": "CANONICAL_MILK",
+	"цукор": "CANONICAL_SUGAR", "цукру": "CANONICAL_SUGAR", "sugar": "CANONICAL_SUGAR",
+	"борошно": "CANONICAL_FLOUR", "мука": "CANONICAL_FLOUR", "пшеничне борошно": "CANONICAL_FLOUR", "flour": "CANONICAL_FLOUR",
+	"сметана": "CANONICAL_SOUR_CREAM", "сметани": "CANONICAL_SOUR_CREAM", "sour cream": "CANONICAL_SOUR_CREAM",
+	"сир": "CANONICAL_CHEESE", "твердий сир": "CANONICAL_CHEESE", "cheese": "CANONICAL_CHEESE",
+}
+
+// Ukrainian inflection suffixes to strip when finding stem (minimum stem length: 4 characters)
+var inflectionSuffixes = []string{
+	"ами", "ями", "ного", "ному", "них", "ній", "ної", "ним", "ний",
+	"ою", "ею", "єю", "ом", "ем", "єм", "ів", "ей",
+	"на", "не", "ні", "та", "те", "ті",
+	"а", "я", "и", "і", "у", "ю", "е", "є", "о",
+}
+
+var noiseWords = []string{
+	"великої", "великий", "велика", "великі", "великих",
+	"середньої", "середній", "середня", "середні", "середніх",
+	"маленької", "маленький", "маленька", "маленькі", "маленьких",
+	"свіжого", "свіжий", "свіжа", "свіжі", "свіжих",
+	"стиглого", "стиглий", "стигла", "стиглі", "стиглих",
+	"пастеризоване", "знежирене",
+}
+
+func cleanNoise(s string) string {
+	str := strings.ToLower(strings.TrimSpace(s))
+	for _, nw := range noiseWords {
+		if strings.HasPrefix(str, nw+" ") {
+			str = strings.TrimSpace(str[len(nw)+1:])
+		}
+		if strings.HasSuffix(str, " "+nw) {
+			str = strings.TrimSpace(str[:len(str)-len(nw)-1])
+		}
+	}
+	return str
+}
+
+func stripEnding(word string) string {
+	w := strings.ToLower(strings.TrimSpace(word))
+	runes := []rune(w)
+	if len(runes) < 4 {
+		return w
+	}
+	for _, suffix := range inflectionSuffixes {
+		sRunes := []rune(suffix)
+		if len(runes) > len(sRunes) && (len(runes)-len(sRunes)) >= 4 {
+			if strings.HasSuffix(w, suffix) {
+				return string(runes[:len(runes)-len(sRunes)])
+			}
+		}
+	}
+	return w
+}
+
+func scoreMatch(ingClean, prodClean string) int {
+	if ingClean == prodClean {
+		return 100
+	}
+
+	// Canonical match of full phrases
+	canonI := canonicalAliases[ingClean]
+	canonP := canonicalAliases[prodClean]
+	if canonI != "" && canonP != "" && canonI == canonP {
+		return 90
+	}
+
+	// Check if any canonical alias phrase is inside ingClean and prodClean
+	for phrase, canon := range canonicalAliases {
+		if canonI == "" && strings.Contains(ingClean, phrase) {
+			canonI = canon
+		}
+		if canonP == "" && strings.Contains(prodClean, phrase) {
+			canonP = canon
+		}
+	}
+	if canonI != "" && canonP != "" && canonI == canonP {
+		return 85
+	}
+
+	// Check if entire ingredient is contained in product or vice versa
+	if strings.Contains(prodClean, ingClean) || strings.Contains(ingClean, prodClean) {
+		return 80
+	}
+
+	iWords := strings.Fields(ingClean)
+	pWords := strings.Fields(prodClean)
+
+	maxWordScore := 0
+	for _, iw := range iWords {
+		canonI := canonicalAliases[iw]
+		stemI := stripEnding(iw)
+
+		for _, pw := range pWords {
+			canonP := canonicalAliases[pw]
+			stemP := stripEnding(pw)
+
+			if iw == pw {
+				if 75 > maxWordScore {
+					maxWordScore = 75
+				}
+			} else if canonI != "" && canonP != "" && canonI == canonP {
+				if 70 > maxWordScore {
+					maxWordScore = 70
+				}
+			} else if len([]rune(stemI)) >= 4 && stemI == stemP {
+				if 60 > maxWordScore {
+					maxWordScore = 60
+				}
+			} else if (len(pw) >= 3 && strings.HasPrefix(iw, pw)) || (len(iw) >= 3 && strings.HasPrefix(pw, iw)) {
+				if 50 > maxWordScore {
+					maxWordScore = 50
+				}
+			}
+		}
+	}
+
+	return maxWordScore
+}
+
+type candidateMatch struct {
+	product db.Product
+	score   int
+}
+
+// FindFridgeProductMatch searches for a matching product in the fridge inventory using deterministic scoring and stemming.
 func FindFridgeProductMatch(ingName string, prods []db.Product) *db.Product {
-	iName := strings.ToLower(strings.TrimSpace(ingName))
-	if iName == "" {
+	rawIng := strings.TrimSpace(ingName)
+	if rawIng == "" {
+		return nil
+	}
+	ingClean := cleanNoise(rawIng)
+
+	var candidates []candidateMatch
+	for _, p := range prods {
+		if p.Quantity <= 0 {
+			continue
+		}
+		pClean := cleanNoise(p.Name)
+		score := scoreMatch(ingClean, pClean)
+		if score >= 40 {
+			candidates = append(candidates, candidateMatch{product: p, score: score})
+		}
+	}
+
+	if len(candidates) == 0 {
 		return nil
 	}
 
-	// 1. Direct or Substring match
-	for i := range prods {
-		if prods[i].Quantity <= 0 {
-			continue
+	// Deterministic sorting:
+	// 1. Match score DESC
+	// 2. Absolute difference in name length ASC
+	// 3. Alphabetical product name ASC
+	// 4. Product ID string ASC
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].score != candidates[j].score {
+			return candidates[i].score > candidates[j].score
 		}
-		pName := strings.ToLower(strings.TrimSpace(prods[i].Name))
-		if pName == iName || strings.Contains(pName, iName) || strings.Contains(iName, pName) {
-			return &prods[i]
+		diffI := math.Abs(float64(len(candidates[i].product.Name) - len(rawIng)))
+		diffJ := math.Abs(float64(len(candidates[j].product.Name) - len(rawIng)))
+		if diffI != diffJ {
+			return diffI < diffJ
+		}
+		if candidates[i].product.Name != candidates[j].product.Name {
+			return candidates[i].product.Name < candidates[j].product.Name
+		}
+		return candidates[i].product.ID.String() < candidates[j].product.ID.String()
+	})
+
+	matched := candidates[0].product
+	return &matched
+}
+
+func isMinorIngredient(name, unit string, qty float64) bool {
+	normName := strings.ToLower(strings.TrimSpace(name))
+	normUnit := units.Normalize(unit)
+
+	// Units that imply minor seasonings
+	if normUnit == units.Pinch || normUnit == units.Clove || normUnit == units.Teaspoon {
+		return true
+	}
+
+	minorKeywords := []string{
+		"сіль", "солі", "salt",
+		"перець", "перцю", "pepper",
+		"спеції", "приправа", "лавровий", "орегано", "базилік", "паприка", "кріп", "петрушка", "зелень",
+		"сода", "оцет", "ваниль", "ваніль", "кориця", "гвоздика", "мускатний", "вода", "кмин", "кунжут",
+	}
+
+	for _, kw := range minorKeywords {
+		if strings.Contains(normName, kw) {
+			return true
 		}
 	}
 
-	// 2. Word-by-word match
-	iWords := strings.Fields(iName)
-	for i := range prods {
-		if prods[i].Quantity <= 0 {
-			continue
-		}
-		pName := strings.ToLower(strings.TrimSpace(prods[i].Name))
-		pWords := strings.Fields(pName)
-		for _, iw := range iWords {
-			if len(iw) < 3 {
-				continue
-			}
-			for _, pw := range pWords {
-				if len(pw) < 3 {
-					continue
-				}
-				if strings.HasPrefix(pw, iw) || strings.HasPrefix(iw, pw) {
-					return &prods[i]
-				}
-			}
-		}
+	if (strings.Contains(normName, "олія") || strings.Contains(normName, "цукор") || strings.Contains(normName, "соус")) &&
+		((normUnit == units.Gram || normUnit == units.Milliliter) && qty <= 15) {
+		return true
 	}
 
-	// 3. Common Ukrainian food synonyms
-	synonyms := map[string][]string{
-		"томат":    {"помідор", "помідори", "томати", "чері"},
-		"помідор":  {"томат", "томати", "помідори", "чері"},
-		"сир":      {"моцарела", "пармезан", "сулугуні", "фета", "творог", "кисломолочний"},
-		"моцарела": {"сир", "моцарелла"},
-		"овочі":    {"помідор", "помідори", "огірок", "огірки", "перець", "салат", "зелень", "капуста"},
-		"курка":    {"філе", "куряче", "грудка", "курятина"},
-		"філе":     {"курка", "куряче", "індичка"},
-	}
-
-	for key, synList := range synonyms {
-		if strings.Contains(iName, key) {
-			for _, syn := range synList {
-				for i := range prods {
-					if prods[i].Quantity > 0 && strings.Contains(strings.ToLower(prods[i].Name), syn) {
-						return &prods[i]
-					}
-				}
-			}
-		}
-	}
-
-	return nil
+	return false
 }

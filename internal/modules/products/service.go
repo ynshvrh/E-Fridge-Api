@@ -260,11 +260,15 @@ func (s *Service) ConsumeProduct(ctx context.Context, fridgeID, id uuid.UUID, am
 }
 
 func (s *Service) ConsumeProductWithUnit(ctx context.Context, fridgeID, id uuid.UUID, amount float64, userUnit string) (*ProductDTO, error) {
+	return s.ConsumeProductWithUnitTx(ctx, s.queries, fridgeID, id, amount, userUnit)
+}
+
+func (s *Service) ConsumeProductWithUnitTx(ctx context.Context, q *db.Queries, fridgeID, id uuid.UUID, amount float64, userUnit string) (*ProductDTO, error) {
 	if amount <= 0 {
 		amount = 1.0
 	}
 
-	p, err := s.queries.GetProductByID(ctx, db.GetProductByIDParams{
+	p, err := q.GetProductByID(ctx, db.GetProductByIDParams{
 		ID:       id,
 		FridgeID: fridgeID,
 	})
@@ -304,7 +308,7 @@ func (s *Service) ConsumeProductWithUnit(ctx context.Context, fridgeID, id uuid.
 		}
 		remainingGrams := math.Round((totalGrams-consumedGrams)*100) / 100
 		if remainingGrams <= 0 {
-			if err := s.queries.DeleteProduct(ctx, db.DeleteProductParams{ID: id, FridgeID: fridgeID}); err != nil {
+			if err := q.DeleteProduct(ctx, db.DeleteProductParams{ID: id, FridgeID: fridgeID}); err != nil {
 				return nil, err
 			}
 			p.Quantity = 0
@@ -329,7 +333,7 @@ func (s *Service) ConsumeProductWithUnit(ctx context.Context, fridgeID, id uuid.
 		}
 		remainingMl := math.Round((totalMl-consumedMl)*100) / 100
 		if remainingMl <= 0 {
-			if err := s.queries.DeleteProduct(ctx, db.DeleteProductParams{ID: id, FridgeID: fridgeID}); err != nil {
+			if err := q.DeleteProduct(ctx, db.DeleteProductParams{ID: id, FridgeID: fridgeID}); err != nil {
 				return nil, err
 			}
 			p.Quantity = 0
@@ -352,7 +356,7 @@ func (s *Service) ConsumeProductWithUnit(ctx context.Context, fridgeID, id uuid.
 		}
 		remainingGrams := math.Round((totalGrams-consumedGrams)*100) / 100
 		if remainingGrams <= 0 {
-			if err := s.queries.DeleteProduct(ctx, db.DeleteProductParams{ID: id, FridgeID: fridgeID}); err != nil {
+			if err := q.DeleteProduct(ctx, db.DeleteProductParams{ID: id, FridgeID: fridgeID}); err != nil {
 				return nil, err
 			}
 			p.Quantity = 0
@@ -369,12 +373,12 @@ func (s *Service) ConsumeProductWithUnit(ctx context.Context, fridgeID, id uuid.
 		pieceGrams := nutrition.GetDefaultPieceGrams(p.Name)
 		consumedGrams := amount * pieceGrams
 		totalGrams := p.Quantity
-		if pUnit == "кг" || pUnit == "l" || pUnit == "л" {
+		if pUnit == "кг" || pUnit == "kg" || pUnit == "l" || pUnit == "л" {
 			totalGrams *= 1000.0
 		}
 		remainingGrams := math.Round((totalGrams-consumedGrams)*100) / 100
 		if remainingGrams <= 0 {
-			if err := s.queries.DeleteProduct(ctx, db.DeleteProductParams{ID: id, FridgeID: fridgeID}); err != nil {
+			if err := q.DeleteProduct(ctx, db.DeleteProductParams{ID: id, FridgeID: fridgeID}); err != nil {
 				return nil, err
 			}
 			p.Quantity = 0
@@ -395,7 +399,7 @@ func (s *Service) ConsumeProductWithUnit(ctx context.Context, fridgeID, id uuid.
 	} else {
 		newQty = math.Round((p.Quantity-amount)*100) / 100
 		if newQty <= 0 {
-			if err := s.queries.DeleteProduct(ctx, db.DeleteProductParams{ID: id, FridgeID: fridgeID}); err != nil {
+			if err := q.DeleteProduct(ctx, db.DeleteProductParams{ID: id, FridgeID: fridgeID}); err != nil {
 				return nil, err
 			}
 			p.Quantity = 0
@@ -405,7 +409,7 @@ func (s *Service) ConsumeProductWithUnit(ctx context.Context, fridgeID, id uuid.
 		newUnit = p.Unit
 	}
 
-	updated, err := s.queries.UpdateProductQuantityAndUnit(ctx, db.UpdateProductQuantityAndUnitParams{
+	updated, err := q.UpdateProductQuantityAndUnit(ctx, db.UpdateProductQuantityAndUnitParams{
 		ID:       id,
 		FridgeID: fridgeID,
 		Quantity: newQty,

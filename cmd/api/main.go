@@ -62,10 +62,10 @@ func main() {
 	productsService := products.NewService(queries, cfg)
 	productsHandler := products.NewHandler(productsService)
 
-	nutritionService := nutrition.NewService(queries)
+	nutritionService := nutrition.NewService(queries, dbConn.Pool)
 	nutritionHandler := nutrition.NewHandler(nutritionService)
 
-	cookingService := cooking.NewService(queries, productsService, nutritionService)
+	cookingService := cooking.NewService(queries, dbConn.Pool, productsService, nutritionService)
 	cookingHandler := cooking.NewHandler(cookingService)
 
 	// Rate limiter & concurrency guard for AI endpoints (15s cooldown, max 10/5min)
