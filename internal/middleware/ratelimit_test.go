@@ -148,3 +148,56 @@ func TestAIGuard(t *testing.T) {
 		t.Fatalf("expected 200 after cooldown, got %d", recAfterCooldown.Code)
 	}
 }
+
+func TestGetClientIP_SpoofingProtection(t *testing.T) {
+	// Case 1: Direct public connection with spoofed headers -> ignore headers
+	req1 := httptest.NewRequest("POST", "/test", nil)
+	req1.RemoteAddr = "203.0.113.195:54321"
+	req1.Header.Set("X-Forwarded-For", "10.0.0.1")
+	req1.Header.Set("X-Real-IP", "10.0.0.2")
+
+	ip1 := GetClientIP(req1)
+	if ip1 != "203.0.113.195" {
+		t.Fatalf("expected remote addr 203.0.113.195 to be used against spoofing, got %s", ip1)
+	}
+
+	// Case 2: Trusted local reverse proxy with X-Real-IP -> trust X-Real-IP
+	req2 := httptest.NewRequest("POST", "/test", nil)
+	req2.RemoteAddr = "172.18.0.2:54321" // Docker bridge private network
+	req2.Header.Set("X-Real-IP", "198.51.100.5")
+
+	ip2 := GetClientIP(req2)
+	if ip2 != "198.51.100.5" {
+		t.Fatalf("expected X-Real-IP 198.51.100.5 from private proxy, got %s", ip2)
+	}
+
+	// Case 3: Trusted loopback with X-Forwarded-For -> trust X-Forwarded-For
+	req3 := httptest.NewRequest("POST", "/test", nil)
+	req3.RemoteAddr = "127.0.0.1:54321"
+	req3.Header.Set("X-Forwarded-For", "198.51.100.6, 172.18.0.2")
+
+	ip3 := GetClientIP(req3)
+	if ip3 != "198.51.100.6" {
+		t.Fatalf("expected client IP from X-Forwarded-For, got %s", ip3)
+	}
+}
+
+func TestEmailAndIPKey(t *testing.T) {
+	req := httptest.NewRequest("POST", "/test", strings.NewReader(`{"email":"User@Example.Com","code":"123456"}`))
+	req.RemoteAddr = "203.0.113.1:1234"
+
+	key := EmailAndIPKey(req)
+	expected := "user@example.com:203.0.113.1"
+	if key != expected {
+		t.Fatalf("expected %s, got %s", expected, key)
+	}
+
+	// Ensure body is still readable by subsequent handlers
+	bodyBytes, err := io.ReadAll(req.Body)
+	if err != nil {
+		t.Fatalf("failed to read restored body: %v", err)
+	}
+	if !strings.Contains(string(bodyBytes), "123456") {
+		t.Fatalf("restored body content mismatch: %s", string(bodyBytes))
+	}
+}

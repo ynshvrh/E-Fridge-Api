@@ -18,14 +18,16 @@ type Handler struct {
 	loginLimiter    *middleware.RateLimiter
 	registerLimiter *middleware.RateLimiter
 	resendLimiter   *middleware.RateLimiter
+	confirmLimiter  *middleware.RateLimiter
 }
 
 func NewHandler(service *Service) *Handler {
 	return &Handler{
 		service:         service,
-		loginLimiter:    middleware.NewRateLimiter(5, 1*time.Minute, "Занадто багато спроб входу. Зачекайте 1 хвилину перед наступною спробою.", "TOO_MANY_REQUESTS"),
-		registerLimiter: middleware.NewRateLimiter(5, 5*time.Minute, "Занадто багато спроб реєстрації. Зачекайте кілька хвилин перед наступною спробою.", "TOO_MANY_REQUESTS"),
-		resendLimiter:   middleware.NewRateLimiter(3, 5*time.Minute, "Занадто багато запитів коду. Зачекайте кілька хвилин перед наступною спробою.", "TOO_MANY_REQUESTS"),
+		loginLimiter:    middleware.NewRateLimiter(5, 1*time.Minute, "Занадто багато спроб входу. Зачекайте 1 хвилину перед наступною спробою.", "TOO_MANY_REQUESTS", middleware.EmailAndIPKey),
+		registerLimiter: middleware.NewRateLimiter(5, 5*time.Minute, "Занадто багато спроб реєстрації. Зачекайте кілька хвилин перед наступною спробою.", "TOO_MANY_REQUESTS", middleware.EmailAndIPKey),
+		resendLimiter:   middleware.NewRateLimiter(3, 5*time.Minute, "Занадто багато запитів коду. Зачекайте кілька хвилин перед наступною спробою.", "TOO_MANY_REQUESTS", middleware.EmailAndIPKey),
+		confirmLimiter:  middleware.NewRateLimiter(5, 5*time.Minute, "Занадто багато спроб підтвердження. Зачекайте кілька хвилин перед наступною спробою.", "TOO_MANY_REQUESTS", middleware.EmailAndIPKey),
 	}
 }
 
@@ -60,9 +62,9 @@ type RefreshRequest struct {
 func (h *Handler) Routes(jwtSecret string) chi.Router {
 	r := chi.NewRouter()
 
-	// Public routes with rate limiters
+	// Public routes with rate limiters (bound to email + IP)
 	r.With(h.registerLimiter.Middleware()).Post("/register", h.Register)
-	r.Post("/register/confirm", h.ConfirmRegistration)
+	r.With(h.confirmLimiter.Middleware()).Post("/register/confirm", h.ConfirmRegistration)
 	r.With(h.resendLimiter.Middleware()).Post("/register/resend", h.ResendCode)
 	r.Post("/google", h.GoogleAuth)
 	r.With(h.loginLimiter.Middleware()).Post("/login", h.Login)

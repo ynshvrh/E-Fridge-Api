@@ -1,7 +1,10 @@
 package middleware
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"strconv"
@@ -22,30 +25,72 @@ func MaxBodySize(maxBytes int64) func(http.Handler) http.Handler {
 	}
 }
 
+// isPrivateOrLoopback returns true if ipStr is a loopback or private network address.
+func isPrivateOrLoopback(ipStr string) bool {
+	ip := net.ParseIP(ipStr)
+	if ip == nil {
+		return false
+	}
+	return ip.IsLoopback() || ip.IsPrivate()
+}
+
 // GetClientIP extracts the client IP address from the request.
+// Reverse proxy headers (X-Real-IP, X-Forwarded-For) are only trusted if the direct connection (RemoteAddr)
+// originates from a loopback or private network address (e.g. local Nginx or Docker bridge network).
 func GetClientIP(r *http.Request) string {
-	// First check X-Forwarded-For if behind a proxy
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		parts := strings.Split(xff, ",")
-		if len(parts) > 0 {
-			ip := strings.TrimSpace(parts[0])
-			if ip != "" {
-				return ip
+	remoteHost, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		remoteHost = r.RemoteAddr
+	}
+
+	// Only trust forwarded headers if the peer is a trusted local/private proxy
+	if isPrivateOrLoopback(remoteHost) {
+		// Prefer X-Real-IP set by trusted reverse proxy (e.g. Nginx proxy_set_header X-Real-IP $remote_addr)
+		if xri := strings.TrimSpace(r.Header.Get("X-Real-IP")); xri != "" {
+			if ip := net.ParseIP(xri); ip != nil {
+				return xri
+			}
+		}
+
+		// Fallback to X-Forwarded-For if behind a proxy chain
+		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+			parts := strings.Split(xff, ",")
+			for _, p := range parts {
+				ipStr := strings.TrimSpace(p)
+				if ipStr != "" && net.ParseIP(ipStr) != nil {
+					return ipStr
+				}
 			}
 		}
 	}
 
-	// Then check X-Real-IP
-	if xri := r.Header.Get("X-Real-IP"); xri != "" {
-		return strings.TrimSpace(xri)
+	return remoteHost
+}
+
+// EmailAndIPKey extracts the email from the JSON body (if present) and combines it with the client IP
+// in the format "<email>:<ip>". If no email is present or the body cannot be parsed, it falls back to IP.
+// The request body is preserved and can be read by downstream handlers.
+func EmailAndIPKey(r *http.Request) string {
+	ip := GetClientIP(r)
+	if r.Body == nil {
+		return ip
 	}
 
-	// Fall back to RemoteAddr
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err == nil {
-		return host
+	bodyBytes, err := io.ReadAll(io.LimitReader(r.Body, 8192))
+	if err != nil || len(bodyBytes) == 0 {
+		return ip
 	}
-	return r.RemoteAddr
+	r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+
+	var payload struct {
+		Email string `json:"email"`
+	}
+	if err := json.Unmarshal(bodyBytes, &payload); err == nil && strings.TrimSpace(payload.Email) != "" {
+		email := strings.ToLower(strings.TrimSpace(payload.Email))
+		return email + ":" + ip
+	}
+
+	return ip
 }
 
 // RateLimiter tracks requests per client key using a sliding window.
