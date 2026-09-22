@@ -13,9 +13,11 @@ import (
 )
 
 var (
-	ErrFridgeNotFound = errors.New("fridge not found")
-	ErrNotAuthorized  = errors.New("not authorized to perform this action")
-	ErrMemberNotFound = errors.New("user with this email not found")
+	ErrFridgeNotFound    = errors.New("fridge not found")
+	ErrNotAuthorized     = errors.New("not authorized to perform this action")
+	ErrMemberNotFound     = errors.New("user with this email not found")
+	ErrInvalidRole       = errors.New("invalid member role")
+	ErrCannotRemoveOwner = errors.New("cannot remove fridge owner")
 )
 
 type Service struct {
@@ -149,13 +151,19 @@ func (s *Service) AddMemberByEmail(ctx context.Context, fridgeID, actorID uuid.U
 		return nil, ErrNotAuthorized
 	}
 
+	role = strings.ToLower(strings.TrimSpace(role))
+	if role == "" {
+		role = "member"
+	}
+
+	// Role whitelist: only "member" and "admin" are allowed. Role "owner" cannot be assigned via AddMember!
+	if role != "member" && role != "admin" {
+		return nil, fmt.Errorf("%w: role must be 'member' or 'admin'", ErrInvalidRole)
+	}
+
 	targetUser, err := s.queries.GetUserByEmail(ctx, strings.TrimSpace(email))
 	if err != nil {
 		return nil, ErrMemberNotFound
-	}
-
-	if role == "" {
-		role = "member"
 	}
 
 	m, err := s.queries.AddFridgeMember(ctx, db.AddFridgeMemberParams{
@@ -182,6 +190,27 @@ func (s *Service) RemoveMember(ctx context.Context, fridgeID, actorID, targetUse
 		UserID:   actorID,
 	})
 	if err != nil || (actorMember.Role != "owner" && actorMember.Role != "admin") {
+		return ErrNotAuthorized
+	}
+
+	targetMember, err := s.queries.GetFridgeMember(ctx, db.GetFridgeMemberParams{
+		FridgeID: fridgeID,
+		UserID:   targetUserID,
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrMemberNotFound
+		}
+		return fmt.Errorf("failed to find member: %w", err)
+	}
+
+	// Protection: Fridge owner cannot be removed via RemoveMember!
+	if targetMember.Role == "owner" {
+		return ErrCannotRemoveOwner
+	}
+
+	// Protection: Admin cannot remove another admin (only owner can remove admins)
+	if actorMember.Role == "admin" && targetMember.Role == "admin" && actorID != targetUserID {
 		return ErrNotAuthorized
 	}
 

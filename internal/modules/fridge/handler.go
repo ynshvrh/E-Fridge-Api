@@ -61,7 +61,11 @@ func (h *Handler) AddMember(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if errors.Is(err, ErrNotAuthorized) {
-			response.Error(w, http.StatusForbidden, "Лише власник може додавати учасників", "FORBIDDEN")
+			response.Error(w, http.StatusForbidden, "Лише власник або адміністратор може додавати учасників", "FORBIDDEN")
+			return
+		}
+		if errors.Is(err, ErrInvalidRole) {
+			response.Error(w, http.StatusBadRequest, "Неприпустима роль учасника (дозволені: member, admin)", "INVALID_ROLE")
 			return
 		}
 		response.Error(w, http.StatusBadRequest, err.Error(), "ADD_MEMBER_FAILED")
@@ -88,8 +92,16 @@ func (h *Handler) RemoveMember(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.service.RemoveMember(r.Context(), fridgeID, actorID, targetUserID); err != nil {
+		if errors.Is(err, ErrCannotRemoveOwner) {
+			response.Error(w, http.StatusForbidden, "Неможливо видалити власника холодильника", "CANNOT_REMOVE_OWNER")
+			return
+		}
 		if errors.Is(err, ErrNotAuthorized) {
-			response.Error(w, http.StatusForbidden, "Лише власник може видаляти учасників", "FORBIDDEN")
+			response.Error(w, http.StatusForbidden, "Недостатньо прав для видалення цього учасника", "FORBIDDEN")
+			return
+		}
+		if errors.Is(err, ErrMemberNotFound) {
+			response.Error(w, http.StatusNotFound, "Учасника не знайдено", "USER_NOT_FOUND")
 			return
 		}
 		response.Error(w, http.StatusInternalServerError, err.Error(), "REMOVE_MEMBER_FAILED")
