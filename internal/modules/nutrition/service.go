@@ -358,7 +358,7 @@ func (s *Service) DeleteLog(ctx context.Context, id, userID uuid.UUID) (*DeleteL
 				Fat:        log.Fat,
 				Carbs:      log.Carbs,
 				Notes:      "Повернено зі щоденника харчування",
-				CreatedBy:  userID,
+				CreatedBy:  pgtype.UUID{Bytes: userID, Valid: true},
 			})
 			if err == nil {
 				restoredToFridge = true

@@ -33,7 +33,7 @@ type CreateProductParams struct {
 	Fat        float64
 	Carbs      float64
 	Notes      string
-	CreatedBy  uuid.UUID
+	CreatedBy  pgtype.UUID
 }
 
 func (q *Queries) CreateProduct(ctx context.Context, arg CreateProductParams) (Product, error) {

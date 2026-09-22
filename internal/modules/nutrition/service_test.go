@@ -130,7 +130,7 @@ func TestDeleteLogRestoresToFridgeWithDB(t *testing.T) {
 		Fat:        5,
 		Carbs:      3,
 		Notes:      "",
-		CreatedBy:  u.ID,
+		CreatedBy:  pgtype.UUID{Bytes: u.ID, Valid: true},
 	})
 	if err != nil {
 		t.Fatalf("failed to create product: %v", err)

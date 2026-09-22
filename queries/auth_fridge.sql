@@ -143,5 +143,34 @@ WHERE expires_at < NOW();
 DELETE FROM users
 WHERE id = $1;
 
+-- name: CreateFridgeInvite :one
+INSERT INTO fridge_invites (fridge_id, token, created_by, expires_at)
+VALUES ($1, $2, $3, $4)
+RETURNING id, fridge_id, token, created_by, expires_at, created_at;
+
+-- name: GetFridgeInviteByToken :one
+SELECT fi.id, fi.fridge_id, fi.token, fi.created_by, fi.expires_at, fi.created_at, f.name as fridge_name
+FROM fridge_invites fi
+JOIN fridges f ON fi.fridge_id = f.id
+WHERE fi.token = $1 AND fi.expires_at > NOW();
+
+-- name: DeleteFridgeInvite :exec
+DELETE FROM fridge_invites
+WHERE token = $1;
+
+-- name: TransferFridgeOwnership :exec
+UPDATE fridges
+SET owner_id = $2, updated_at = NOW()
+WHERE id = $1;
+
+-- name: UpdateFridgeMemberRole :exec
+UPDATE fridge_members
+SET role = $3
+WHERE fridge_id = $1 AND user_id = $2;
+
+-- name: CountFridgeMembers :one
+SELECT COUNT(*) FROM fridge_members
+WHERE fridge_id = $1;
+
 
 

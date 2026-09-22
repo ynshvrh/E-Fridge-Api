@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 const addFridgeMember = `-- name: AddFridgeMember :one
@@ -47,6 +48,18 @@ func (q *Queries) CleanExpiredPendingRegistrations(ctx context.Context) error {
 	return err
 }
 
+const countFridgeMembers = `-- name: CountFridgeMembers :one
+SELECT COUNT(*) FROM fridge_members
+WHERE fridge_id = $1
+`
+
+func (q *Queries) CountFridgeMembers(ctx context.Context, fridgeID uuid.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countFridgeMembers, fridgeID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const createFridge = `-- name: CreateFridge :one
 INSERT INTO fridges (name, owner_id)
 VALUES ($1, $2)
@@ -67,6 +80,38 @@ func (q *Queries) CreateFridge(ctx context.Context, arg CreateFridgeParams) (Fri
 		&i.OwnerID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const createFridgeInvite = `-- name: CreateFridgeInvite :one
+INSERT INTO fridge_invites (fridge_id, token, created_by, expires_at)
+VALUES ($1, $2, $3, $4)
+RETURNING id, fridge_id, token, created_by, expires_at, created_at
+`
+
+type CreateFridgeInviteParams struct {
+	FridgeID  uuid.UUID
+	Token     string
+	CreatedBy pgtype.UUID
+	ExpiresAt time.Time
+}
+
+func (q *Queries) CreateFridgeInvite(ctx context.Context, arg CreateFridgeInviteParams) (FridgeInvite, error) {
+	row := q.db.QueryRow(ctx, createFridgeInvite,
+		arg.FridgeID,
+		arg.Token,
+		arg.CreatedBy,
+		arg.ExpiresAt,
+	)
+	var i FridgeInvite
+	err := row.Scan(
+		&i.ID,
+		&i.FridgeID,
+		&i.Token,
+		&i.CreatedBy,
+		&i.ExpiresAt,
+		&i.CreatedAt,
 	)
 	return i, err
 }
@@ -212,6 +257,16 @@ func (q *Queries) DeleteFridge(ctx context.Context, id uuid.UUID) error {
 	return err
 }
 
+const deleteFridgeInvite = `-- name: DeleteFridgeInvite :exec
+DELETE FROM fridge_invites
+WHERE token = $1
+`
+
+func (q *Queries) DeleteFridgeInvite(ctx context.Context, token string) error {
+	_, err := q.db.Exec(ctx, deleteFridgeInvite, token)
+	return err
+}
+
 const deletePendingRegistration = `-- name: DeletePendingRegistration :exec
 DELETE FROM pending_registrations
 WHERE email = $1
@@ -247,6 +302,38 @@ func (q *Queries) GetFridgeByID(ctx context.Context, id uuid.UUID) (Fridge, erro
 		&i.OwnerID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getFridgeInviteByToken = `-- name: GetFridgeInviteByToken :one
+SELECT fi.id, fi.fridge_id, fi.token, fi.created_by, fi.expires_at, fi.created_at, f.name as fridge_name
+FROM fridge_invites fi
+JOIN fridges f ON fi.fridge_id = f.id
+WHERE fi.token = $1 AND fi.expires_at > NOW()
+`
+
+type GetFridgeInviteByTokenRow struct {
+	ID         uuid.UUID
+	FridgeID   uuid.UUID
+	Token      string
+	CreatedBy  pgtype.UUID
+	ExpiresAt  time.Time
+	CreatedAt  time.Time
+	FridgeName string
+}
+
+func (q *Queries) GetFridgeInviteByToken(ctx context.Context, token string) (GetFridgeInviteByTokenRow, error) {
+	row := q.db.QueryRow(ctx, getFridgeInviteByToken, token)
+	var i GetFridgeInviteByTokenRow
+	err := row.Scan(
+		&i.ID,
+		&i.FridgeID,
+		&i.Token,
+		&i.CreatedBy,
+		&i.ExpiresAt,
+		&i.CreatedAt,
+		&i.FridgeName,
 	)
 	return i, err
 }
@@ -556,6 +643,39 @@ WHERE token_hash = $1
 
 func (q *Queries) RevokeRefreshToken(ctx context.Context, tokenHash string) error {
 	_, err := q.db.Exec(ctx, revokeRefreshToken, tokenHash)
+	return err
+}
+
+const transferFridgeOwnership = `-- name: TransferFridgeOwnership :exec
+UPDATE fridges
+SET owner_id = $2, updated_at = NOW()
+WHERE id = $1
+`
+
+type TransferFridgeOwnershipParams struct {
+	ID      uuid.UUID
+	OwnerID uuid.UUID
+}
+
+func (q *Queries) TransferFridgeOwnership(ctx context.Context, arg TransferFridgeOwnershipParams) error {
+	_, err := q.db.Exec(ctx, transferFridgeOwnership, arg.ID, arg.OwnerID)
+	return err
+}
+
+const updateFridgeMemberRole = `-- name: UpdateFridgeMemberRole :exec
+UPDATE fridge_members
+SET role = $3
+WHERE fridge_id = $1 AND user_id = $2
+`
+
+type UpdateFridgeMemberRoleParams struct {
+	FridgeID uuid.UUID
+	UserID   uuid.UUID
+	Role     string
+}
+
+func (q *Queries) UpdateFridgeMemberRole(ctx context.Context, arg UpdateFridgeMemberRoleParams) error {
+	_, err := q.db.Exec(ctx, updateFridgeMemberRole, arg.FridgeID, arg.UserID, arg.Role)
 	return err
 }
 
