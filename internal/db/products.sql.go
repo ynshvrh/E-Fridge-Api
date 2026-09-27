@@ -130,6 +130,72 @@ func (q *Queries) GetProductByID(ctx context.Context, arg GetProductByIDParams) 
 	return i, err
 }
 
+const listExpiringProductsForDigest = `-- name: ListExpiringProductsForDigest :many
+SELECT 
+    p.id AS product_id,
+    p.fridge_id,
+    f.name AS fridge_name,
+    p.name AS product_name,
+    p.quantity,
+    p.unit,
+    p.expiry_date,
+    u.id AS user_id,
+    u.email AS user_email,
+    u.name AS user_name
+FROM products p
+JOIN fridges f ON f.id = p.fridge_id
+JOIN fridge_members fm ON fm.fridge_id = p.fridge_id
+JOIN users u ON u.id = fm.user_id
+WHERE p.expiry_date IS NOT NULL 
+  AND p.expiry_date <= $1
+  AND p.quantity > 0
+ORDER BY u.email ASC, p.expiry_date ASC, p.name ASC
+`
+
+type ListExpiringProductsForDigestRow struct {
+	ProductID   uuid.UUID
+	FridgeID    uuid.UUID
+	FridgeName  string
+	ProductName string
+	Quantity    float64
+	Unit        string
+	ExpiryDate  pgtype.Date
+	UserID      uuid.UUID
+	UserEmail   string
+	UserName    string
+}
+
+func (q *Queries) ListExpiringProductsForDigest(ctx context.Context, expiryDate pgtype.Date) ([]ListExpiringProductsForDigestRow, error) {
+	rows, err := q.db.Query(ctx, listExpiringProductsForDigest, expiryDate)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListExpiringProductsForDigestRow
+	for rows.Next() {
+		var i ListExpiringProductsForDigestRow
+		if err := rows.Scan(
+			&i.ProductID,
+			&i.FridgeID,
+			&i.FridgeName,
+			&i.ProductName,
+			&i.Quantity,
+			&i.Unit,
+			&i.ExpiryDate,
+			&i.UserID,
+			&i.UserEmail,
+			&i.UserName,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listProductsByFridge = `-- name: ListProductsByFridge :many
 SELECT id, fridge_id, name, category, quantity, unit, expiry_date, calories, protein, fat, carbs, notes, created_by, created_at, updated_at FROM products
 WHERE fridge_id = $1

@@ -124,7 +124,7 @@ func (h *Handler) DeleteLog(w http.ResponseWriter, r *http.Request) {
 
 	result, err := h.service.DeleteLog(r.Context(), id, userID)
 	if err != nil {
-		response.Error(w, http.StatusInternalServerError, "Failed to delete log: "+err.Error(), "INTERNAL_ERROR")
+		response.InternalError(w, r, err, "Не вдалося видалити запис")
 		return
 	}
 

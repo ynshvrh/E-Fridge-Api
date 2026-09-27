@@ -158,6 +158,10 @@ func (m *mockMailer) SendGoogleWelcomeEmail(ctx context.Context, toEmail, name, 
 	return nil
 }
 
+func (m *mockMailer) SendExpiringProductsEmail(ctx context.Context, toEmail, name string, items []ExpiringProductDigestItem) error {
+	return nil
+}
+
 func TestRegistrationFullFlowWithDB(t *testing.T) {
 	ctx := context.Background()
 	dbURL := getTestDBURL()

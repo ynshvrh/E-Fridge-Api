@@ -1,4 +1,5 @@
 # Binaries and build outputs
+/api
 bin/
 dist/
 build/

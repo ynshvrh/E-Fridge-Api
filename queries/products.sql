@@ -54,3 +54,25 @@ WHERE id = $1 AND fridge_id = $2;
 -- name: DeleteAllProductsByFridge :exec
 DELETE FROM products
 WHERE fridge_id = $1;
+
+-- name: ListExpiringProductsForDigest :many
+SELECT 
+    p.id AS product_id,
+    p.fridge_id,
+    f.name AS fridge_name,
+    p.name AS product_name,
+    p.quantity,
+    p.unit,
+    p.expiry_date,
+    u.id AS user_id,
+    u.email AS user_email,
+    u.name AS user_name
+FROM products p
+JOIN fridges f ON f.id = p.fridge_id
+JOIN fridge_members fm ON fm.fridge_id = p.fridge_id
+JOIN users u ON u.id = fm.user_id
+WHERE p.expiry_date IS NOT NULL 
+  AND p.expiry_date <= $1
+  AND p.quantity > 0
+ORDER BY u.email ASC, p.expiry_date ASC, p.name ASC;
+

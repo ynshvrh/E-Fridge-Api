@@ -53,7 +53,7 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 
 	summary, err := h.service.ListItems(r.Context(), fridgeID)
 	if err != nil {
-		response.Error(w, http.StatusInternalServerError, err.Error(), "INTERNAL_ERROR")
+		response.InternalError(w, r, err, "Не вдалося отримати список покупок")
 		return
 	}
 
@@ -84,7 +84,7 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 			response.Error(w, http.StatusBadRequest, err.Error(), "VALIDATION_ERROR")
 			return
 		}
-		response.Error(w, http.StatusInternalServerError, err.Error(), "INTERNAL_ERROR")
+		response.InternalError(w, r, err, "Не вдалося додати товар до списку покупок")
 		return
 	}
 
@@ -113,7 +113,7 @@ func (h *Handler) BatchCreate(w http.ResponseWriter, r *http.Request) {
 
 	items, err := h.service.BatchCreateItems(r.Context(), fridgeID, userID, req.Items)
 	if err != nil {
-		response.Error(w, http.StatusInternalServerError, err.Error(), "INTERNAL_ERROR")
+		response.InternalError(w, r, err, "Не вдалося додати товари до списку покупок")
 		return
 	}
 
@@ -153,7 +153,7 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 			response.Error(w, http.StatusBadRequest, err.Error(), "VALIDATION_ERROR")
 			return
 		}
-		response.Error(w, http.StatusInternalServerError, err.Error(), "INTERNAL_ERROR")
+		response.InternalError(w, r, err, "Не вдалося оновити товар")
 		return
 	}
 
@@ -188,7 +188,7 @@ func (h *Handler) ToggleBought(w http.ResponseWriter, r *http.Request) {
 			response.Error(w, http.StatusNotFound, "Shopping item not found", "NOT_FOUND")
 			return
 		}
-		response.Error(w, http.StatusInternalServerError, err.Error(), "INTERNAL_ERROR")
+		response.InternalError(w, r, err, "Не вдалося оновити стан товару")
 		return
 	}
 
@@ -224,7 +224,7 @@ func (h *Handler) Purchase(w http.ResponseWriter, r *http.Request) {
 			response.Error(w, http.StatusNotFound, "Shopping item not found", "NOT_FOUND")
 			return
 		}
-		response.Error(w, http.StatusInternalServerError, err.Error(), "INTERNAL_ERROR")
+		response.InternalError(w, r, err, "Не вдалося перемістити товар у холодильник")
 		return
 	}
 
@@ -249,7 +249,7 @@ func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.service.DeleteItem(r.Context(), fridgeID, itemID); err != nil {
-		response.Error(w, http.StatusInternalServerError, err.Error(), "INTERNAL_ERROR")
+		response.InternalError(w, r, err, "Не вдалося видалити товар")
 		return
 	}
 
@@ -264,7 +264,7 @@ func (h *Handler) ClearBought(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.service.ClearBoughtItems(r.Context(), fridgeID); err != nil {
-		response.Error(w, http.StatusInternalServerError, err.Error(), "INTERNAL_ERROR")
+		response.InternalError(w, r, err, "Не вдалося очистити придбані товари")
 		return
 	}
 
@@ -279,7 +279,7 @@ func (h *Handler) ClearAll(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.service.ClearAllItems(r.Context(), fridgeID); err != nil {
-		response.Error(w, http.StatusInternalServerError, err.Error(), "INTERNAL_ERROR")
+		response.InternalError(w, r, err, "Не вдалося очистити список покупок")
 		return
 	}
 

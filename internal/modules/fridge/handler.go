@@ -117,7 +117,7 @@ func (h *Handler) RemoveMember(w http.ResponseWriter, r *http.Request) {
 			response.Error(w, http.StatusNotFound, "Учасника не знайдено", "USER_NOT_FOUND")
 			return
 		}
-		response.Error(w, http.StatusInternalServerError, err.Error(), "REMOVE_MEMBER_FAILED")
+		response.InternalError(w, r, err, "Не вдалося видалити учасника з холодильника")
 		return
 	}
 
@@ -133,7 +133,7 @@ func (h *Handler) GetFridges(w http.ResponseWriter, r *http.Request) {
 
 	fridges, err := h.service.GetMyFridges(r.Context(), userID)
 	if err != nil {
-		response.Error(w, http.StatusInternalServerError, "Failed to get fridges", "INTERNAL_ERROR")
+		response.InternalError(w, r, err, "Failed to get fridges")
 		return
 	}
 
@@ -152,7 +152,7 @@ func (h *Handler) CreateFridge(w http.ResponseWriter, r *http.Request) {
 
 	fridge, err := h.service.CreateFridge(r.Context(), userID, req.Name)
 	if err != nil {
-		response.Error(w, http.StatusInternalServerError, "Failed to create fridge", "INTERNAL_ERROR")
+		response.InternalError(w, r, err, "Failed to create fridge")
 		return
 	}
 
@@ -183,7 +183,7 @@ func (h *Handler) GetFridge(w http.ResponseWriter, r *http.Request) {
 			response.Error(w, http.StatusNotFound, "Fridge not found", "NOT_FOUND")
 			return
 		}
-		response.Error(w, http.StatusInternalServerError, "Failed to get fridge details", "INTERNAL_ERROR")
+		response.InternalError(w, r, err, "Failed to get fridge details")
 		return
 	}
 
@@ -205,7 +205,7 @@ func (h *Handler) CreateInvite(w http.ResponseWriter, r *http.Request) {
 			response.Error(w, http.StatusForbidden, "Лише власник або адміністратор може створювати запрошення", "FORBIDDEN")
 			return
 		}
-		response.Error(w, http.StatusInternalServerError, err.Error(), "CREATE_INVITE_FAILED")
+		response.InternalError(w, r, err, "Не вдалося створити запрошення")
 		return
 	}
 
@@ -220,7 +220,7 @@ func (h *Handler) GetInvite(w http.ResponseWriter, r *http.Request) {
 			response.Error(w, http.StatusNotFound, "Запрошення не знайдено або термін його дії вичерпано", "INVITE_EXPIRED")
 			return
 		}
-		response.Error(w, http.StatusInternalServerError, err.Error(), "INTERNAL_ERROR")
+		response.InternalError(w, r, err, "Не вдалося отримати дані запрошення")
 		return
 	}
 
@@ -241,7 +241,7 @@ func (h *Handler) JoinFridge(w http.ResponseWriter, r *http.Request) {
 			response.Error(w, http.StatusNotFound, "Запрошення не знайдено або термін його дії вичерпано", "INVITE_EXPIRED")
 			return
 		}
-		response.Error(w, http.StatusInternalServerError, err.Error(), "JOIN_FRIDGE_FAILED")
+		response.InternalError(w, r, err, "Не вдалося приєднатися до холодильника")
 		return
 	}
 
@@ -270,7 +270,7 @@ func (h *Handler) LeaveFridge(w http.ResponseWriter, r *http.Request) {
 			response.Error(w, http.StatusConflict, "Власник не може покинути холодильник, поки є інші учасники. Передайте права або видаліть холодильник.", "OWNER_MUST_TRANSFER")
 			return
 		}
-		response.Error(w, http.StatusInternalServerError, err.Error(), "LEAVE_FRIDGE_FAILED")
+		response.InternalError(w, r, err, "Не вдалося покинути холодильник")
 		return
 	}
 
@@ -311,7 +311,7 @@ func (h *Handler) TransferOwnership(w http.ResponseWriter, r *http.Request) {
 			response.Error(w, http.StatusNotFound, "Цільовий користувач не є учасником цього холодильника", "USER_NOT_FOUND")
 			return
 		}
-		response.Error(w, http.StatusInternalServerError, err.Error(), "TRANSFER_FAILED")
+		response.InternalError(w, r, err, "Не вдалося передати права власності")
 		return
 	}
 

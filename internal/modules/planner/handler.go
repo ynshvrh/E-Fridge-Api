@@ -56,7 +56,7 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 
 	plans, err := h.service.ListMealPlans(r.Context(), fridgeID, startDate, endDate)
 	if err != nil {
-		response.Error(w, http.StatusInternalServerError, err.Error(), "FETCH_PLANS_FAILED")
+		response.InternalError(w, r, err, "Не вдалося завантажити плани харчування")
 		return
 	}
 
@@ -160,7 +160,7 @@ func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.service.DeleteMealPlan(r.Context(), fridgeID, id); err != nil {
-		response.Error(w, http.StatusInternalServerError, err.Error(), "DELETE_PLAN_FAILED")
+		response.InternalError(w, r, err, "Не вдалося видалити план харчування")
 		return
 	}
 
@@ -191,7 +191,7 @@ func (h *Handler) Generate(w http.ResponseWriter, r *http.Request) {
 
 	plans, err := h.service.GeneratePlanWithAI(r.Context(), fridgeID, userID, input)
 	if err != nil {
-		response.Error(w, http.StatusInternalServerError, err.Error(), "GENERATE_PLAN_FAILED")
+		response.InternalError(w, r, err, "Не вдалося згенерувати план харчування")
 		return
 	}
 
@@ -213,7 +213,7 @@ func (h *Handler) GenerateDay(w http.ResponseWriter, r *http.Request) {
 			response.Error(w, http.StatusConflict, err.Error(), "DAY_ALREADY_GENERATED")
 			return
 		}
-		response.Error(w, http.StatusInternalServerError, err.Error(), "GENERATE_DAY_FAILED")
+		response.InternalError(w, r, err, "Не вдалося згенерувати меню на день")
 		return
 	}
 
@@ -236,7 +236,7 @@ func (h *Handler) GenerateMeal(w http.ResponseWriter, r *http.Request) {
 			response.Error(w, http.StatusBadRequest, err.Error(), "INVALID_MEAL_TYPE")
 			return
 		}
-		response.Error(w, http.StatusInternalServerError, err.Error(), "GENERATE_MEAL_FAILED")
+		response.InternalError(w, r, err, "Не вдалося згенерувати страву")
 		return
 	}
 

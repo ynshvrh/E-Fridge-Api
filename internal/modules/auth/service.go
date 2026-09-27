@@ -72,6 +72,10 @@ func (s *Service) SetMailer(mailer Mailer) {
 	s.mailer = mailer
 }
 
+func (s *Service) Mailer() Mailer {
+	return s.mailer
+}
+
 type UserDTO struct {
 	ID                 uuid.UUID `json:"id"`
 	Email              string    `json:"email"`

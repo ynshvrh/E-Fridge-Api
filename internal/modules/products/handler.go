@@ -74,7 +74,7 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 
 	list, err := h.service.ListProducts(r.Context(), fridgeID, category, search)
 	if err != nil {
-		response.Error(w, http.StatusInternalServerError, "Failed to list products", "INTERNAL_ERROR")
+		response.InternalError(w, r, err, "Failed to list products")
 		return
 	}
 
@@ -97,7 +97,7 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 			response.Error(w, http.StatusBadRequest, err.Error(), "INVALID_INPUT")
 			return
 		}
-		response.Error(w, http.StatusInternalServerError, "Failed to create product", "INTERNAL_ERROR")
+		response.InternalError(w, r, err, "Failed to create product")
 		return
 	}
 
@@ -119,7 +119,7 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 			response.Error(w, http.StatusNotFound, "Product not found", "NOT_FOUND")
 			return
 		}
-		response.Error(w, http.StatusInternalServerError, "Failed to get product", "INTERNAL_ERROR")
+		response.InternalError(w, r, err, "Failed to get product")
 		return
 	}
 
@@ -151,7 +151,7 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 			response.Error(w, http.StatusBadRequest, err.Error(), "INVALID_INPUT")
 			return
 		}
-		response.Error(w, http.StatusInternalServerError, "Failed to update product", "INTERNAL_ERROR")
+		response.InternalError(w, r, err, "Failed to update product")
 		return
 	}
 
@@ -176,7 +176,7 @@ func (h *Handler) Consume(w http.ResponseWriter, r *http.Request) {
 			response.Error(w, http.StatusNotFound, "Product not found", "NOT_FOUND")
 			return
 		}
-		response.Error(w, http.StatusInternalServerError, "Failed to consume product", "INTERNAL_ERROR")
+		response.InternalError(w, r, err, "Failed to consume product")
 		return
 	}
 
@@ -193,7 +193,7 @@ func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.service.DeleteProduct(r.Context(), fridgeID, id); err != nil {
-		response.Error(w, http.StatusInternalServerError, "Failed to delete product", "INTERNAL_ERROR")
+		response.InternalError(w, r, err, "Failed to delete product")
 		return
 	}
 
@@ -204,7 +204,7 @@ func (h *Handler) Clear(w http.ResponseWriter, r *http.Request) {
 	fridgeID, _ := middleware.GetFridgeID(r.Context())
 
 	if err := h.service.ClearFridge(r.Context(), fridgeID); err != nil {
-		response.Error(w, http.StatusInternalServerError, "Failed to clear fridge", "INTERNAL_ERROR")
+		response.InternalError(w, r, err, "Failed to clear fridge")
 		return
 	}
 
@@ -224,7 +224,7 @@ func (h *Handler) EstimateNutrition(w http.ResponseWriter, r *http.Request) {
 			response.Error(w, http.StatusBadRequest, "Product name cannot be empty", "INVALID_INPUT")
 			return
 		}
-		response.Error(w, http.StatusInternalServerError, "Failed to estimate nutrition", "ESTIMATION_FAILED")
+		response.InternalError(w, r, err, "Failed to estimate nutrition")
 		return
 	}
 
@@ -248,7 +248,7 @@ func (h *Handler) LookupBarcode(w http.ResponseWriter, r *http.Request) {
 			response.Error(w, http.StatusBadRequest, "Некоректний формат штрих-коду", "INVALID_BARCODE")
 			return
 		}
-		response.Error(w, http.StatusInternalServerError, err.Error(), "LOOKUP_FAILED")
+		response.InternalError(w, r, err, "Помилка при пошуку товару за штрих-кодом")
 		return
 	}
 

@@ -154,7 +154,7 @@ func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 			response.Error(w, http.StatusBadRequest, err.Error(), "INVALID_INPUT")
 			return
 		}
-		response.Error(w, http.StatusInternalServerError, err.Error(), "INTERNAL_ERROR")
+		response.InternalError(w, r, err, "Не вдалося ініціювати реєстрацію")
 		return
 	}
 
@@ -222,7 +222,7 @@ func (h *Handler) ResendCode(w http.ResponseWriter, r *http.Request) {
 			response.Error(w, http.StatusBadRequest, err.Error(), "INVALID_INPUT")
 			return
 		}
-		response.Error(w, http.StatusInternalServerError, err.Error(), "INTERNAL_ERROR")
+		response.InternalError(w, r, err, "Не вдалося повторно надіслати код")
 		return
 	}
 

@@ -44,7 +44,7 @@ func (h *Handler) GetHistory(w http.ResponseWriter, r *http.Request) {
 	fridgeID, _ := middleware.GetFridgeID(r.Context())
 	history, err := h.service.GetHistory(r.Context(), fridgeID, 50)
 	if err != nil {
-		response.Error(w, http.StatusInternalServerError, err.Error(), "FETCH_HISTORY_FAILED")
+		response.InternalError(w, r, err, "Не вдалося завантажити історію чату")
 		return
 	}
 	response.JSON(w, http.StatusOK, history)
@@ -53,7 +53,7 @@ func (h *Handler) GetHistory(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) ClearHistory(w http.ResponseWriter, r *http.Request) {
 	fridgeID, _ := middleware.GetFridgeID(r.Context())
 	if err := h.service.ClearHistory(r.Context(), fridgeID); err != nil {
-		response.Error(w, http.StatusInternalServerError, err.Error(), "CLEAR_HISTORY_FAILED")
+		response.InternalError(w, r, err, "Не вдалося очистити історію чату")
 		return
 	}
 	response.JSON(w, http.StatusOK, map[string]string{"message": "chat history cleared"})
@@ -71,7 +71,7 @@ func (h *Handler) Chat(w http.ResponseWriter, r *http.Request) {
 
 	result, err := h.service.Chat(r.Context(), fridgeID, userID, req)
 	if err != nil {
-		response.Error(w, http.StatusInternalServerError, "AI Chef failed to process message", "CHEF_ERROR")
+		response.InternalError(w, r, err, "Шеф-кухар тимчасово недоступний. Спробуйте пізніше.")
 		return
 	}
 
@@ -90,7 +90,7 @@ func (h *Handler) Generate(w http.ResponseWriter, r *http.Request) {
 
 	result, err := h.service.GenerateRecipe(r.Context(), fridgeID, userID, req)
 	if err != nil {
-		response.Error(w, http.StatusInternalServerError, "AI Chef failed to generate recipe", "CHEF_ERROR")
+		response.InternalError(w, r, err, "Шеф-кухар не зміг згенерувати рецепт. Спробуйте інший запит.")
 		return
 	}
 

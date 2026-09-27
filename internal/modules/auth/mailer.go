@@ -20,9 +20,19 @@ import (
 	"github.com/ynshvrh/E-Fridge-Api/internal/config"
 )
 
+type ExpiringProductDigestItem struct {
+	ProductName string
+	FridgeName  string
+	Quantity    float64
+	Unit        string
+	ExpiryDate  string
+	IsExpired   bool
+}
+
 type Mailer interface {
 	SendVerificationEmail(ctx context.Context, toEmail, name, code string) error
 	SendGoogleWelcomeEmail(ctx context.Context, toEmail, name, generatedPassword string) error
+	SendExpiringProductsEmail(ctx context.Context, toEmail, name string, items []ExpiringProductDigestItem) error
 }
 
 func NewMailer(cfg *config.Config) Mailer {
@@ -115,6 +125,34 @@ func (m *SMTPMailer) SendGoogleWelcomeEmail(ctx context.Context, toEmail, name, 
 	return m.sendRawEmail(toEmail, subject, htmlBody)
 }
 
+func (m *SMTPMailer) SendExpiringProductsEmail(ctx context.Context, toEmail, name string, items []ExpiringProductDigestItem) error {
+	toEmail = strings.TrimSpace(toEmail)
+	if toEmail == "" {
+		return errors.New("recipient email is required")
+	}
+	if len(items) == 0 {
+		return nil
+	}
+
+	if m.user == "" || m.password == "" {
+		slog.Warn("SMTP credentials not configured, skipping sending expiring products email",
+			"recipient", toEmail, "items_count", len(items))
+		if m.environment == "production" {
+			return errors.New("SMTP credentials are not configured")
+		}
+		return nil
+	}
+
+	displayName := name
+	if displayName == "" {
+		displayName = "користувачу"
+	}
+
+	subject := fmt.Sprintf("E-Fridge: зверніть увагу на термін придатності продуктів (%d)", len(items))
+	htmlBody := buildExpiringProductsHTML(displayName, items)
+	return m.sendRawEmail(toEmail, subject, htmlBody)
+}
+
 func (m *SMTPMailer) sendRawEmail(toEmail, subject, htmlBody string) error {
 	msg := bytes.NewBuffer(nil)
 	msg.WriteString(fmt.Sprintf("From: %s\r\n", m.fromEmail))
@@ -197,6 +235,25 @@ func (m *ResendMailer) SendGoogleWelcomeEmail(ctx context.Context, toEmail, name
 	subject := "Ваш акаунт E-Fridge створено через Google"
 	htmlBody := buildGoogleWelcomeHTML(displayName, generatedPassword)
 	return m.sendResend(ctx, toEmail, subject, htmlBody, generatedPassword)
+}
+
+func (m *ResendMailer) SendExpiringProductsEmail(ctx context.Context, toEmail, name string, items []ExpiringProductDigestItem) error {
+	toEmail = strings.TrimSpace(toEmail)
+	if toEmail == "" {
+		return errors.New("recipient email is required")
+	}
+	if len(items) == 0 {
+		return nil
+	}
+
+	displayName := name
+	if displayName == "" {
+		displayName = "користувачу"
+	}
+
+	subject := fmt.Sprintf("E-Fridge: зверніть увагу на термін придатності продуктів (%d)", len(items))
+	htmlBody := buildExpiringProductsHTML(displayName, items)
+	return m.sendResend(ctx, toEmail, subject, htmlBody, fmt.Sprintf("%d expiring items", len(items)))
 }
 
 func (m *ResendMailer) sendResend(ctx context.Context, toEmail, subject, htmlBody, devLogParam string) error {
@@ -345,6 +402,62 @@ func buildGoogleWelcomeHTML(name, password string) string {
 </body>
 </html>`, escapedName, escapedPassword)
 }
+
+func buildExpiringProductsHTML(name string, items []ExpiringProductDigestItem) string {
+	escapedName := html.EscapeString(name)
+
+	var itemsList strings.Builder
+	for _, it := range items {
+		status := fmt.Sprintf("<span style=\"color:#d97706;\">закінчується %s</span>", html.EscapeString(it.ExpiryDate))
+		if it.IsExpired {
+			status = fmt.Sprintf("<span style=\"color:#dc2626;font-weight:600;\">термін сплив (%s)</span>", html.EscapeString(it.ExpiryDate))
+		}
+		itemsList.WriteString(fmt.Sprintf(
+			`<li style="margin-bottom:10px;line-height:1.5;"><strong>%s</strong> (%s) — %.1f %s, %s</li>`,
+			html.EscapeString(it.ProductName),
+			html.EscapeString(it.FridgeName),
+			it.Quantity,
+			html.EscapeString(it.Unit),
+			status,
+		))
+	}
+
+	return fmt.Sprintf(`<!DOCTYPE html>
+<html lang="uk">
+<head>
+  <meta charset="utf-8">
+  <title>Термін придатності продуктів</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #fafaf9; margin: 0; padding: 24px; color: #1c1917; }
+    .card { max-width: 520px; margin: 0 auto; background: #ffffff; border-radius: 24px; padding: 36px 32px; border: 1px solid #e7e5e4; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05); }
+    .badge { width: 56px; height: 56px; margin: 0 auto 20px; border-radius: 18px; background: #fef3c7; border: 1px solid #fde68a; display: flex; align-items: center; justify-content: center; text-align: center; line-height: 56px; }
+    h1 { font-size: 22px; font-weight: 700; text-align: center; color: #1c1917; margin: 0 0 8px 0; }
+    p { font-size: 14px; line-height: 1.6; color: #57534e; text-align: center; margin: 0 0 24px 0; }
+    .items-box { background: #fafaf9; border: 1px solid #e7e5e4; border-radius: 16px; padding: 20px 24px; margin: 20px 0; }
+    ul { margin: 0; padding-left: 20px; text-align: left; }
+    .note { font-size: 13px; color: #78716c; margin-top: 24px; text-align: center; }
+    .footer { font-size: 12px; color: #a8a29e; text-align: center; margin-top: 32px; border-top: 1px solid #f5f5f4; padding-top: 16px; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="badge">
+      <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#d97706" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/></svg>
+    </div>
+    <h1>Продукти потребують уваги</h1>
+    <p>Вітаємо, <strong>%s</strong>! У ваших холодильниках є продукти, термін придатності яких закінчується або вже закінчився:</p>
+    <div class="items-box">
+      <ul>
+        %s
+      </ul>
+    </div>
+    <p class="note">Відкрийте <strong>E-Fridge</strong>, щоб спланувати приготування або оновити запаси.</p>
+    <div class="footer">&copy; E-Fridge Ecosystem</div>
+  </div>
+</body>
+</html>`, escapedName, itemsList.String())
+}
+
 
 func GenerateVerificationCode() (string, error) {
 	n, err := rand.Int(rand.Reader, big.NewInt(900000))

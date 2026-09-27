@@ -48,7 +48,7 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 
 	recipes, err := h.service.ListRecipes(r.Context(), fridgeID, userID)
 	if err != nil {
-		response.Error(w, http.StatusInternalServerError, err.Error(), "INTERNAL_ERROR")
+		response.InternalError(w, r, err, "Не вдалося завантажити список рецептів")
 		return
 	}
 
@@ -80,7 +80,7 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 			response.Error(w, http.StatusNotFound, "Recipe not found", "NOT_FOUND")
 			return
 		}
-		response.Error(w, http.StatusInternalServerError, err.Error(), "INTERNAL_ERROR")
+		response.InternalError(w, r, err, "Не вдалося завантажити рецепт")
 		return
 	}
 
@@ -111,7 +111,7 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 			response.Error(w, http.StatusBadRequest, err.Error(), "VALIDATION_ERROR")
 			return
 		}
-		response.Error(w, http.StatusInternalServerError, err.Error(), "INTERNAL_ERROR")
+		response.InternalError(w, r, err, "Не вдалося зберегти рецепт")
 		return
 	}
 
@@ -138,7 +138,7 @@ func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.service.DeleteRecipe(r.Context(), fridgeID, userID, recipeID); err != nil {
-		response.Error(w, http.StatusInternalServerError, err.Error(), "INTERNAL_ERROR")
+		response.InternalError(w, r, err, "Не вдалося видалити рецепт")
 		return
 	}
 

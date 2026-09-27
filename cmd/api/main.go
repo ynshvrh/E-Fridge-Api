@@ -24,12 +24,12 @@ import (
 	"github.com/ynshvrh/E-Fridge-Api/internal/modules/chef"
 	"github.com/ynshvrh/E-Fridge-Api/internal/modules/cooking"
 	"github.com/ynshvrh/E-Fridge-Api/internal/modules/fridge"
+	"github.com/ynshvrh/E-Fridge-Api/internal/modules/maintenance"
 	"github.com/ynshvrh/E-Fridge-Api/internal/modules/nutrition"
 	"github.com/ynshvrh/E-Fridge-Api/internal/modules/planner"
 	"github.com/ynshvrh/E-Fridge-Api/internal/modules/products"
 	"github.com/ynshvrh/E-Fridge-Api/internal/modules/recipes"
 	"github.com/ynshvrh/E-Fridge-Api/internal/modules/shopping"
-	"github.com/ynshvrh/E-Fridge-Api/internal/pkg/response"
 )
 
 func main() {
@@ -85,35 +85,10 @@ func main() {
 	plannerService := planner.NewService(queries, cfg)
 	plannerHandler := planner.NewHandler(plannerService, aiGuard)
 
-	// Periodic cleaner for expired pending registrations (every 1 hour)
-	cleanerStop := make(chan struct{})
-	go func() {
-		cleanCtx, cleanCancel := context.WithTimeout(context.Background(), 10*time.Second)
-		if err := authService.CleanExpiredPendingRegistrations(cleanCtx); err != nil {
-			slog.Warn("Initial cleanup of expired pending registrations failed", "error", err)
-		} else {
-			slog.Info("Completed initial cleanup of expired pending registrations")
-		}
-		cleanCancel()
-
-		ticker := time.NewTicker(1 * time.Hour)
-		defer ticker.Stop()
-
-		for {
-			select {
-			case <-cleanerStop:
-				return
-			case <-ticker.C:
-				cCtx, cCancel := context.WithTimeout(context.Background(), 10*time.Second)
-				if err := authService.CleanExpiredPendingRegistrations(cCtx); err != nil {
-					slog.Warn("Failed to clean expired pending registrations", "error", err)
-				} else {
-					slog.Info("Successfully cleaned expired pending registrations")
-				}
-				cCancel()
-			}
-		}
-	}()
+	// 5. Daily Maintenance Worker (09:00 Europe/Kyiv Expiration Reminders & Periodic Cleanup)
+	maintenanceWorker := maintenance.NewWorker(queries, dbConn.Pool, authService.Mailer(), authService)
+	workerCtx, workerCancel := context.WithCancel(context.Background())
+	go maintenanceWorker.Start(workerCtx)
 
 	// 5. Router
 	r := chi.NewRouter()
@@ -145,16 +120,12 @@ func main() {
 		MaxAge:           300,
 	}))
 
-	// Health Check
-	r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
-		response.JSON(w, http.StatusOK, map[string]string{"status": "ok", "service": "E-Fridge-Api"})
-	})
+	// Active Database Health Check
+	r.Get("/health", database.HealthHandler(dbConn.Pool, "E-Fridge-Api"))
 
 	// API v1 Routes
 	r.Route("/api/v1", func(api chi.Router) {
-		api.Get("/health", func(w http.ResponseWriter, r *http.Request) {
-			response.JSON(w, http.StatusOK, map[string]string{"status": "ok", "service": "E-Fridge-Api v1"})
-		})
+		api.Get("/health", database.HealthHandler(dbConn.Pool, "E-Fridge-Api v1"))
 
 		api.Mount("/auth", authHandler.Routes(cfg.JWTSecret))
 		api.Mount("/fridges", fridgeHandler.Routes(cfg.JWTSecret))
@@ -191,7 +162,7 @@ func main() {
 	<-shutdownChan
 	slog.Info("Shutting down server gracefully...")
 
-	close(cleanerStop)
+	workerCancel()
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutdownCancel()
