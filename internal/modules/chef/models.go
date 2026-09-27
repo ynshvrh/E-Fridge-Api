@@ -39,6 +39,7 @@ type ChatRequest struct {
 	History           []ChatMessage `json:"history,omitempty"`
 	DietaryPreference string        `json:"dietary_preference,omitempty"`
 	Language          string        `json:"language,omitempty"`
+	ImageBase64       string        `json:"image_base64,omitempty"`
 }
 
 type ChatResponse struct {

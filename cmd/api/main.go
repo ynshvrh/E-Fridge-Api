@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"syscall"
@@ -120,11 +122,22 @@ func main() {
 	r.Use(chimiddleware.RealIP)
 	r.Use(chimiddleware.Logger)
 	r.Use(chimiddleware.Recoverer)
-	r.Use(middleware.MaxBodySize(1 << 20)) // 1 MB request body limit
+	r.Use(middleware.MaxBodySize(10 << 20)) // 10 MB request body limit for base64 camera images
 
 	// CORS
 	r.Use(cors.Handler(cors.Options{
-		AllowedOrigins:   cfg.AllowedOrigins,
+		AllowedOrigins: cfg.AllowedOrigins,
+		AllowOriginFunc: func(r *http.Request, origin string) bool {
+			if cfg.Environment != "production" && isLocalOrLANOrigin(origin) {
+				return true
+			}
+			for _, o := range cfg.AllowedOrigins {
+				if o == "*" || o == origin {
+					return true
+				}
+			}
+			return false
+		},
 		AllowedMethods:   []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
 		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-CSRF-Token", "X-Fridge-Id"},
 		ExposedHeaders:   []string{"Link"},
@@ -188,4 +201,23 @@ func main() {
 	}
 
 	slog.Info("Server stopped cleanly")
+}
+
+func isLocalOrLANOrigin(origin string) bool {
+	if origin == "" {
+		return true
+	}
+	u, err := url.Parse(origin)
+	if err != nil {
+		return false
+	}
+	host := u.Hostname()
+	if host == "localhost" || host == "127.0.0.1" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	if ip != nil {
+		return ip.IsPrivate() || ip.IsLoopback()
+	}
+	return false
 }

@@ -24,6 +24,7 @@ type Config struct {
 	FastModel        string
 	CheapModel       string
 	SmartModel       string
+	VisionModel      string
 	OpenRouterModel  string
 	OpenRouterModels []string
 	ResendAPIKey     string
@@ -58,6 +59,7 @@ func Load() *Config {
 	openRouterKey := getEnv("OPENROUTER_API_KEY", "")
 	freeModel := getEnv("OPENROUTER_FREE_MODEL", getEnv("OPENROUTER_FAST_MODEL", "meta-llama/llama-3.3-70b-instruct:free"))
 	fallbackModel := getEnv("OPENROUTER_FALLBACK_MODEL", getEnv("OPENROUTER_CHEAP_MODEL", "deepseek/deepseek-chat"))
+	visionModel := getEnv("OPENROUTER_VISION_MODEL", "google/gemini-2.0-flash-exp:free")
 
 	resendKey := getEnv("RESEND_API_KEY", "")
 	resendFrom := getEnv("RESEND_FROM_EMAIL", "E-Fridge <onboarding@resend.dev>")
@@ -88,6 +90,7 @@ func Load() *Config {
 		FastModel:        freeModel,
 		CheapModel:       fallbackModel,
 		SmartModel:       fallbackModel,
+		VisionModel:      visionModel,
 		OpenRouterModel:  freeModel,
 		OpenRouterModels: []string{freeModel, fallbackModel},
 		ResendAPIKey:     resendKey,

@@ -21,6 +21,14 @@ func (s *Service) chatFallback(prods []db.Product, req ChatRequest) *ChatRespons
 		strings.Contains(msg, "зроби") ||
 		strings.Contains(msg, "що")
 
+	if req.ImageBase64 != "" {
+		recipe := s.generateFallbackRecipe(prods)
+		return &ChatResponse{
+			Reply:  fmt.Sprintf("Я отримав ваше фото! Для точного мультимодального розпізнавання страв на зображенні необхідне активне з'єднання з Vision AI. Поки що можу запропонувати вам рецепт з наявних продуктів у холодильнику: %s!", recipe.Title),
+			Recipe: &recipe,
+		}
+	}
+
 	if !isRecipeRequest && len(prods) == 0 {
 		return &ChatResponse{
 			Reply: "Привіт! Я ваш шеф-кухар E-Chef. Заповніть свій холодильник продуктами або запитайте мене про будь-яку страву чи рецепт!",

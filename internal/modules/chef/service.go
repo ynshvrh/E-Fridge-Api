@@ -61,12 +61,32 @@ func (s *Service) Chat(ctx context.Context, fridgeID, userID uuid.UUID, req Chat
 		}
 	}
 
-	// Save user message to DB
-	_ = s.saveMessage(ctx, fridgeID, userID, "user", req.Message, nil, nil)
+	// Auto-enrich user dietary and cuisine preferences if not explicitly provided
+	cuisinePref := ""
+	if user, err := s.queries.GetUserFullByID(ctx, userID); err == nil {
+		if req.DietaryPreference == "" {
+			req.DietaryPreference = user.DietaryPreferences
+		}
+		if req.Language == "" {
+			req.Language = user.PreferredLanguage
+		}
+		cuisinePref = user.CuisinePreference
+	}
+
+	// Save user message to DB (record that a photo was sent without storing heavy base64 in DB)
+	savedContent := req.Message
+	if req.ImageBase64 != "" {
+		if strings.TrimSpace(savedContent) == "" {
+			savedContent = "[Фото страви або продукту]"
+		} else {
+			savedContent = "[Фото] " + savedContent
+		}
+	}
+	_ = s.saveMessage(ctx, fridgeID, userID, "user", savedContent, nil, nil)
 
 	var chatRes *ChatResponse
 	if s.cfg.OpenRouterAPIKey != "" {
-		res, err := s.chatWithOpenRouter(ctx, inventory, req)
+		res, err := s.chatWithOpenRouter(ctx, inventory, req, cuisinePref)
 		if err == nil && res != nil {
 			chatRes = res
 		} else {
@@ -158,11 +178,11 @@ func (s *Service) GenerateRecipe(ctx context.Context, fridgeID, userID uuid.UUID
 	return &fallback, nil
 }
 
-func (s *Service) chatWithOpenRouter(ctx context.Context, inventory []string, req ChatRequest) (*ChatResponse, error) {
-	systemPrompt := buildChatSystemPrompt(inventory, req.DietaryPreference, req.Language)
+func (s *Service) chatWithOpenRouter(ctx context.Context, inventory []string, req ChatRequest, cuisinePref string) (*ChatResponse, error) {
+	systemPrompt := buildChatSystemPrompt(inventory, req.DietaryPreference, cuisinePref, req.Language)
 
-	messages := make([]map[string]string, 0, len(req.History)+2)
-	messages = append(messages, map[string]string{
+	messages := make([]map[string]any, 0, len(req.History)+2)
+	messages = append(messages, map[string]any{
 		"role":    "system",
 		"content": systemPrompt,
 	})
@@ -172,54 +192,91 @@ func (s *Service) chatWithOpenRouter(ctx context.Context, inventory []string, re
 		if role != "user" && role != "assistant" {
 			role = "user"
 		}
-		messages = append(messages, map[string]string{
+		messages = append(messages, map[string]any{
 			"role":    role,
 			"content": msg.Content,
 		})
 	}
 
-	messages = append(messages, map[string]string{
-		"role":    "user",
-		"content": req.Message,
-	})
+	if req.ImageBase64 != "" {
+		imgURL := req.ImageBase64
+		if !strings.HasPrefix(imgURL, "data:") {
+			imgURL = "data:image/jpeg;base64," + imgURL
+		}
+		msgText := req.Message
+		if strings.TrimSpace(msgText) == "" {
+			msgText = "Розпізнай будь ласка продукт або страву на фото та надай рекомендацію."
+		}
+		userContent := []map[string]any{
+			{
+				"type": "text",
+				"text": msgText,
+			},
+			{
+				"type": "image_url",
+				"image_url": map[string]string{
+					"url": imgURL,
+				},
+			},
+		}
+		messages = append(messages, map[string]any{
+			"role":    "user",
+			"content": userContent,
+		})
+	} else {
+		messages = append(messages, map[string]any{
+			"role":    "user",
+			"content": req.Message,
+		})
+	}
 
 	var modelsToTry []string
-	lowerMsg := strings.ToLower(req.Message)
-	isComplex := strings.Contains(lowerMsg, "рецепт") ||
-		strings.Contains(lowerMsg, "приготу") ||
-		strings.Contains(lowerMsg, "план") ||
-		strings.Contains(lowerMsg, "вечер") ||
-		strings.Contains(lowerMsg, "обід")
-
-	if isComplex {
-		if s.cfg.SmartModel != "" {
-			modelsToTry = append(modelsToTry, s.cfg.SmartModel)
+	if req.ImageBase64 != "" {
+		if s.cfg.VisionModel != "" {
+			modelsToTry = append(modelsToTry, s.cfg.VisionModel)
 		}
-		if s.cfg.FastModel != "" {
-			modelsToTry = append(modelsToTry, s.cfg.FastModel)
+		visionFallbacks := []string{
+			"google/gemini-2.0-flash-exp:free",
+			"google/gemini-flash-1.5",
+			"meta-llama/llama-3.2-11b-vision-instruct:free",
+			"openai/gpt-4o-mini",
 		}
-	} else {
-		if s.cfg.FastModel != "" {
-			modelsToTry = append(modelsToTry, s.cfg.FastModel)
-		}
-		if s.cfg.SmartModel != "" {
-			modelsToTry = append(modelsToTry, s.cfg.SmartModel)
-		}
-	}
-	for _, m := range s.cfg.OpenRouterModels {
-		found := false
-		for _, added := range modelsToTry {
-			if added == m {
-				found = true
-				break
+		for _, vf := range visionFallbacks {
+			if !sliceContains(modelsToTry, vf) {
+				modelsToTry = append(modelsToTry, vf)
 			}
 		}
-		if !found {
-			modelsToTry = append(modelsToTry, m)
+	} else {
+		lowerMsg := strings.ToLower(req.Message)
+		isComplex := strings.Contains(lowerMsg, "рецепт") ||
+			strings.Contains(lowerMsg, "приготу") ||
+			strings.Contains(lowerMsg, "план") ||
+			strings.Contains(lowerMsg, "вечер") ||
+			strings.Contains(lowerMsg, "обід")
+
+		if isComplex {
+			if s.cfg.SmartModel != "" {
+				modelsToTry = append(modelsToTry, s.cfg.SmartModel)
+			}
+			if s.cfg.FastModel != "" {
+				modelsToTry = append(modelsToTry, s.cfg.FastModel)
+			}
+		} else {
+			if s.cfg.FastModel != "" {
+				modelsToTry = append(modelsToTry, s.cfg.FastModel)
+			}
+			if s.cfg.SmartModel != "" {
+				modelsToTry = append(modelsToTry, s.cfg.SmartModel)
+			}
 		}
-	}
-	if len(modelsToTry) == 0 && s.cfg.OpenRouterModel != "" {
-		modelsToTry = []string{s.cfg.OpenRouterModel}
+		for _, m := range s.cfg.OpenRouterModels {
+			if !sliceContains(modelsToTry, m) {
+				modelsToTry = append(modelsToTry, m)
+			}
+		}
+		if len(modelsToTry) == 0 && s.cfg.OpenRouterModel != "" {
+			modelsToTry = []string{s.cfg.OpenRouterModel}
+		}
 	}
 
 	var lastErr error
@@ -371,4 +428,13 @@ func (s *Service) GetHistory(ctx context.Context, fridgeID uuid.UUID, limit int3
 
 func (s *Service) ClearHistory(ctx context.Context, fridgeID uuid.UUID) error {
 	return s.queries.ClearChefMessages(ctx, fridgeID)
+}
+
+func sliceContains(slice []string, val string) bool {
+	for _, item := range slice {
+		if item == val {
+			return true
+		}
+	}
+	return false
 }
