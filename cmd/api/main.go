@@ -42,7 +42,7 @@ func main() {
 	slog.Info("Starting E-Fridge API", "port", cfg.Port, "env", cfg.Environment)
 
 	// 3. Database
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 
 	dbConn, err := database.Connect(ctx, cfg.DatabaseURL)
