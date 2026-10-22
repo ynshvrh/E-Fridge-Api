@@ -42,10 +42,25 @@ func Connect(ctx context.Context, databaseURL string) (*DB, error) {
 	}
 
 	// Ping database
-	pingCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	if err := pool.Ping(pingCtx); err != nil {
-		return nil, fmt.Errorf("failed to ping database: %w", err)
+	var pingErr error
+	for attempt := 1; attempt <= 6; attempt++ {
+		pingCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		pingErr = pool.Ping(pingCtx)
+		cancel()
+		if pingErr == nil {
+			break
+		}
+		slog.Warn("database not ready, retrying", "attempt", attempt, "error", pingErr)
+		select {
+		case <-ctx.Done():
+			pool.Close()
+			return nil, ctx.Err()
+		case <-time.After(3 * time.Second):
+		}
+	}
+	if pingErr != nil {
+		pool.Close()
+		return nil, fmt.Errorf("failed to ping database: %w", pingErr)
 	}
 
 	slog.Info("Successfully connected to PostgreSQL")
