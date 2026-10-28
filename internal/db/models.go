@@ -46,25 +46,6 @@ type FridgeMember struct {
 	JoinedAt time.Time
 }
 
-type MealPlan struct {
-	ID          uuid.UUID
-	FridgeID    uuid.UUID
-	UserID      uuid.UUID
-	Date        pgtype.Date
-	MealType    string
-	RecipeTitle string
-	RecipeID    pgtype.UUID
-	Calories    int32
-	Protein     float64
-	Fat         float64
-	Carbs       float64
-	IsCompleted bool
-	Notes       string
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
-	RecipeData  []byte
-}
-
 type NutritionLog struct {
 	ID        uuid.UUID
 	UserID    uuid.UUID

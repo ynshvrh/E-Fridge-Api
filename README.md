@@ -30,7 +30,7 @@ E-Fridge API serves as the core business logic and data persistence engine for t
 - Migrations: golang-migrate
 - Authentication: JWT (`golang-jwt/jwt/v5`), bcrypt, Google OAuth verification
 - External Integrations:
-  - OpenRouter API (Meta Llama 3.3 70B, DeepSeek Chat) for AI Chef and Meal Planner
+  - OpenRouter API (Meta Llama 3.3 70B, DeepSeek Chat) for AI Chef
   - Resend API / SMTP for two-step email verification
   - OpenFoodFacts for barcode scanning and nutrition data lookup
 
@@ -48,10 +48,6 @@ E-Fridge API serves as the core business logic and data persistence engine for t
   - Interactive chat assistant with context of products currently available in the user's fridge.
   - Automatic structured recipe extraction (ingredients, steps, preparation time, macros).
   - Ingredient availability matching and one-click missing item shopping suggestions.
-- Meal Planner:
-  - Single-day meal plan generation (breakfast, lunch, dinner) with pantry verification.
-  - Rate-limited per-meal regeneration.
-  - Meal completion toggling and detailed recipe view modal support.
 - Nutrition Tracker:
   - Daily calorie, protein, fat, and carbohydrate targets.
   - Meal logging with direct consumption from fridge stock.
@@ -64,7 +60,7 @@ E-Fridge API serves as the core business logic and data persistence engine for t
 
 - Token Bucket Rate Limiter:
   - Protects sensitive endpoints (login, register, verification code dispatch) against brute-force attacks.
-  - Enforces request throttling on AI generation routes (AI Chef and Meal Planner) to prevent quota exhaustion and spam.
+  - Enforces request throttling on AI generation routes (AI Chef) to prevent quota exhaustion and spam.
 - Password Requirements: Minimum 8-character passwords with bcrypt hashing.
 - CORS Configuration: Configurable allowed origins with credentials support.
 - Data Sanitation: Strict database foreign keys and cascading rules.
@@ -176,15 +172,6 @@ Base URL: `/api/v1`
 - `POST /chef/chat` - Send query to AI Chef with fridge inventory context
 - `DELETE /chef/history` - Clear conversation history
 
-### Meal Planner (`/planner`)
-- `GET /planner` - Fetch meal plan for a specific date
-- `POST /planner/generate-day` - Generate full day meal plan (breakfast, lunch, dinner)
-- `POST /planner/generate-meal` - Generate single meal slot
-- `POST /planner` - Manually create planned meal
-- `PUT /planner/{id}` - Update meal details
-- `DELETE /planner/{id}` - Remove planned meal
-- `PATCH /planner/{id}/toggle` - Mark meal as completed or uncompleted
-
 ### Shopping List (`/shopping`)
 - `GET /shopping` - Get current shopping list items
 - `POST /shopping` - Add item to shopping list
@@ -232,7 +219,6 @@ E-Fridge-Api/
 │   │   ├── cooking/                # Product deduction logic
 │   │   ├── fridge/                 # Fridge space management
 │   │   ├── nutrition/              # Daily goals, logging, and stock restoration
-│   │   ├── planner/                # Meal plan generation and slots
 │   │   ├── products/               # Fridge inventory and barcode service
 │   │   ├── recipes/                # Saved recipes collection
 │   │   └── shopping/               # Shopping list management
